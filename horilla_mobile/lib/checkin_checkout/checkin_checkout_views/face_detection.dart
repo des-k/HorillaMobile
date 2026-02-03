@@ -5,6 +5,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:horilla/checkin_checkout/checkin_checkout_views/setup_imageface.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
@@ -225,7 +226,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
         debugPrint('Face comparison result: $isMatched');
 
         if (isMatched) {
-          await _handleComparisonResult(true);
+          await _handleComparisonResult(isMatched, File(image.path));
           break;
         } else {
           setState(() => _isDetectionPaused = true);
@@ -270,13 +271,21 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     );
   }
 
-  Future<void> _handleComparisonResult(bool isMatched) async {
+  Future<void> _handleComparisonResult(bool isMatched, File capturedFile) async {
     if (!isMatched || !mounted) return;
 
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString("token");
     final typedServerUrl = prefs.getString("typed_url");
     final geoFencing = prefs.getBool("geo_fencing") ?? false;
+
+    if (token == null || typedServerUrl == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Token / Server URL not found. Please login again.')),
+      );
+      return;
+    }
 
     if (geoFencing && widget.userLocation == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -290,20 +299,31 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           ? 'api/attendance/clock-in/'
           : 'api/attendance/clock-out/';
 
-      final uri = Uri.parse('$typedServerUrl/$endpoint');
-      final headers = {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      };
+      final base = typedServerUrl.endsWith('/')
+          ? typedServerUrl.substring(0, typedServerUrl.length - 1)
+          : typedServerUrl;
 
-      final body = geoFencing
-          ? jsonEncode({
-        "latitude": widget.userLocation!.latitude,
-        "longitude": widget.userLocation!.longitude,
-      })
-          : jsonEncode({});
+      final uri = Uri.parse('$base/$endpoint');
 
-      final response = await http.post(uri, headers: headers, body: body);
+      final request = http.MultipartRequest('POST', uri);
+      request.headers['Authorization'] = 'Bearer $token';
+      request.headers['Accept'] = 'application/json';
+
+      if (geoFencing) {
+        request.fields['latitude'] = widget.userLocation!.latitude.toString();
+        request.fields['longitude'] = widget.userLocation!.longitude.toString();
+      }
+
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'image',
+          capturedFile.path,
+          filename: p.basename(capturedFile.path),
+        ),
+      );
+
+      final streamed = await request.send();
+      final response = await http.Response.fromStream(streamed);
 
       if (response.statusCode == 200 && mounted) {
         Navigator.pop(context, {
