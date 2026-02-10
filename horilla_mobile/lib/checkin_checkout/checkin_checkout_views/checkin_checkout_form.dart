@@ -52,10 +52,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String? lastCheckOut;
   String workedHours = '00:00:00';
 
-  // Attendance photos
-  String? checkInImage;
-  String? checkOutImage;
-
   // Location
   Position? userLocation;
 
@@ -65,10 +61,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   // Bottom nav
   final _controller = NotchBottomBarController(index: 1);
 
-  String get swipeDirection {
-    if (canCheckIn) return 'Swipe ➜ CHECK IN';
-    return (lastCheckOut != null) ? 'Swipe ⇦ UPDATE CHECK OUT' : 'Swipe ⇦ CHECK OUT';
-  }
+  String get swipeDirection => canCheckIn ? 'Swipe to Check-In' : 'Swipe to Check-out';
   bool get canCheckIn => !hasAttendance;
   bool get canCheckOut => hasAttendance; // allow updating last checkout multiple times
 
@@ -117,8 +110,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   Future<void> getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
     final typedServerUrl = prefs.getString('typed_url');
-    final raw = (typedServerUrl ?? '').trim();
-    setState(() => baseUrl = raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw);
+    setState(() => baseUrl = (typedServerUrl ?? '').trim());
   }
 
   Future<void> prefetchData() async {
@@ -322,18 +314,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final String? last = (data['last_check_out'])?.toString();
 
     final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
-
-
-
-    final String? inImgRaw = (data['check_in_image'] ??
-            data['clock_in_image'] ??
-            data['attendance_clock_in_image'])
-        ?.toString();
-    final String? outImgRaw = (data['check_out_image'] ??
-            data['clock_out_image'] ??
-            data['attendance_clock_out_image'])
-        ?.toString();
-
     final String attDate = (data['attendance_date'] ?? '').toString();
 
     final bool missingIn = (data['missing_check_in'] ?? false) == true;
@@ -348,8 +328,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       firstCheckIn = (first != null && first.trim().isNotEmpty) ? first : null;
       lastCheckOut = (last != null && last.trim().isNotEmpty && last.trim().toLowerCase() != 'null') ? last : null;
       workedHours = hours;
-      checkInImage = _cleanNullablePath(inImgRaw);
-      checkOutImage = _cleanNullablePath(outImgRaw);
     });
 
     // Sync stopwatch
@@ -383,152 +361,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     return '${twoDigits(duration.inHours)}:${twoDigits(duration.inMinutes.remainder(60))}:${twoDigits(duration.inSeconds.remainder(60))}';
-  }
-
-
-  String? _cleanNullablePath(String? raw) {
-    if (raw == null) return null;
-    final s = raw.trim();
-    if (s.isEmpty) return null;
-    if (s.toLowerCase() == 'null') return null;
-    return s;
-  }
-
-  String _absoluteUrl(String path) {
-    final b = baseUrl.trim();
-    if (b.isEmpty) return path;
-    final base = b.endsWith('/') ? b.substring(0, b.length - 1) : b;
-
-    var p = path.trim();
-    if (p.startsWith('http://') || p.startsWith('https://')) return p;
-    if (!p.startsWith('/')) p = '/$p';
-    return '$base$p';
-  }
-
-  void _openPhotoViewer({required String title, required String url}) {
-    showDialog(
-      context: context,
-      builder: (_) => Dialog(
-        insetPadding: const EdgeInsets.all(12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              color: Colors.black87,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      title,
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close, color: Colors.white),
-                  ),
-                ],
-              ),
-            ),
-            Flexible(
-              child: InteractiveViewer(
-                child: Image.network(
-                  url,
-                  headers: {'Authorization': 'Bearer $getToken'},
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const Padding(
-                    padding: EdgeInsets.all(16.0),
-                    child: Text('Failed to load image'),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _photoTile({required String label, required String? imagePath}) {
-    final hasImage = imagePath != null && imagePath.trim().isNotEmpty;
-
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label, style: const TextStyle(fontSize: 12, color: Colors.black54)),
-          const SizedBox(height: 6),
-          GestureDetector(
-            onTap: hasImage
-                ? () => _openPhotoViewer(
-                      title: label,
-                      url: _absoluteUrl(imagePath!),
-                    )
-                : null,
-            child: Container(
-              height: 86,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(10),
-                color: Colors.grey.shade100,
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: hasImage
-                    ? Image.network(
-                        _absoluteUrl(imagePath!),
-                        headers: {'Authorization': 'Bearer $getToken'},
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image)),
-                      )
-                    : const Center(child: Text('No photo')),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPhotosCard() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20.0),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10.0),
-          color: Colors.white,
-          border: Border.all(color: Colors.grey.shade300, width: 0.0),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.grey.shade50.withOpacity(0.3),
-              spreadRadius: 7,
-              blurRadius: 1,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(12.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Photos', style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  _photoTile(label: 'Check-In', imagePath: checkInImage),
-                  const SizedBox(width: 12),
-                  _photoTile(label: 'Check-Out', imagePath: checkOutImage),
-                ],
-              ),
-              const SizedBox(height: 6),
-              const Text('Tap a photo to view', style: TextStyle(fontSize: 11, color: Colors.black45)),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   String _extractErrorMessage(String responseBody) {
@@ -744,7 +576,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     );
   }
 
-  
   Widget _buildHeader() {
     DateTime? parsedDate;
     if (attendanceDate.trim().isNotEmpty) {
@@ -753,31 +584,22 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       } catch (_) {}
     }
 
-    final dateLabel =
-        DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
-    final String firstText =
-        missingCheckIn ? '-' : (firstCheckIn ?? '-');
-    final String lastText = lastCheckOut ?? '-';
+    final dateLabel = DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
+    final checkInText = firstCheckIn ?? '--:--';
+    final checkOutText = lastCheckOut ?? '--:--';
 
     return Container(
       color: Colors.red,
-      padding: const EdgeInsets.all(16.0),
-      child: SafeArea(
-        bottom: false,
+      height: MediaQuery.of(context).size.height * 0.25,
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text(
-                  'Attendance',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20,
-                  ),
-                ),
+                const Text('Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
                 Text(dateLabel, style: const TextStyle(color: Colors.white70)),
               ],
             ),
@@ -786,78 +608,39 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               children: [
                 _headerStat(
                   label: 'First Check-In',
-                  value: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        firstText,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      ),
-                      if (missingCheckIn)
-                        const Text(
-                          'Missing check-in',
-                          style: TextStyle(color: Colors.white70, fontSize: 11),
-                        ),
-                    ],
-                  ),
+                  value: Text(checkInText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
                 ),
                 _headerStat(
                   label: 'Last Check-Out',
-                  value: Text(
-                    lastText,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                    ),
-                  ),
+                  value: Text(checkOutText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
                 ),
                 _headerStat(
                   label: 'Work Hours',
-                  value: (!hasAttendance || missingCheckIn)
-                      ? const Text(
-                          '-',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
+                  value: isCurrentlyCheckedIn
+                      ? StreamBuilder<int>(
+                          stream: Stream.periodic(const Duration(seconds: 1), (_) => stopwatchManager.elapsed.inSeconds),
+                          builder: (context, snapshot) {
+                            final d = stopwatchManager.elapsed;
+                            return Text(
+                              _formatDuration(d),
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                            );
+                          },
                         )
-                      : (isCurrentlyCheckedIn
-                          ? StreamBuilder<int>(
-                              stream: Stream.periodic(
-                                const Duration(seconds: 1),
-                                (_) => stopwatchManager.elapsed.inSeconds,
-                              ),
-                              builder: (context, snapshot) {
-                                final d = stopwatchManager.elapsed;
-                                return Text(
-                                  _formatDuration(d),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 18,
-                                  ),
-                                );
-                              },
-                            )
-                          : Text(
-                              workedHours,
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 18,
-                              ),
-                            )),
+                      : Text(
+                          workedHours,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                        ),
                 ),
               ],
             ),
             const SizedBox(height: 10),
-            if (!hasAttendance)
+            if (missingCheckIn)
+              const Text(
+                'Missing check-in detected. Please submit an attendance request to fix it.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+            if (!missingCheckIn && !hasAttendance)
               const Text(
                 'No attendance record yet for today.',
                 style: TextStyle(color: Colors.white70, fontSize: 12),
@@ -867,7 +650,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       ),
     );
   }
-
 
   Widget _buildEmployeeCard() {
     return Padding(
@@ -916,7 +698,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                             Positioned.fill(
                               child: ClipOval(
                                 child: Image.network(
-                                  _absoluteUrl(requestsEmpProfile),
+                                  baseUrl + requestsEmpProfile,
                                   headers: {
                                     'Authorization': 'Bearer $getToken',
                                   },
@@ -969,7 +751,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('First Check-In'),
-                      Text(missingCheckIn ? '-' : (firstCheckIn ?? '-')),
+                      Text(firstCheckIn ?? '--:--'),
                     ],
                   ),
                 ),
@@ -979,7 +761,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Last Check-Out'),
-                      Text(lastCheckOut ?? '-'),
+                      Text(lastCheckOut ?? '--:--'),
                     ],
                   ),
                 ),
@@ -1074,8 +856,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         _buildHeader(),
         SizedBox(height: MediaQuery.of(context).size.height * 0.02),
         _buildEmployeeCard(),
-        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        _buildPhotosCard(),
         SizedBox(height: MediaQuery.of(context).size.height * 0.02),
         _buildSwipeAction(),
       ],
