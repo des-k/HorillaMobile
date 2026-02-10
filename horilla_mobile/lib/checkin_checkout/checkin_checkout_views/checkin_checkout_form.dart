@@ -540,7 +540,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
             onPressed: () async {
               await clearToken();
               stopwatchManager.resetStopwatch();
-              Navigator.pushNamed(context, '/login');
+              Navigator.pushReplacementNamed(context, '/login');
             },
           ),
         ],
