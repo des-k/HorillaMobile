@@ -471,13 +471,20 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Future<void> clearToken(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
-    String? typedServerUrl = prefs.getString("typed_url");
-    await prefs.remove('token');
-    isAuthenticated = false;
+
+    // Stop timers before wiping everything
     _notificationTimer?.cancel();
     _notificationTimer = null;
 
-    Navigator.pushNamed(context, '/login', arguments: typedServerUrl);
+    // Clear ALL cached data (token, typed_url, face cache, employee_id, etc.)
+    await prefs.clear();
+
+    isAuthenticated = false;
+
+    if (!mounted) return;
+
+    // Use replacement so user can't go back into Home
+    Navigator.pushReplacementNamed(context, "/login");
   }
 
   Future<void> enableFaceDetection() async {
