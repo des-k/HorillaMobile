@@ -1,19 +1,17 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import 'package:horilla/checkin_checkout/checkin_checkout_views/stopwatch.dart';
-import 'package:permission_handler/permission_handler.dart' as AppSettings;
-import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
-import 'package:shimmer/shimmer.dart';
+import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../horilla_main/home.dart';
-import 'face_detection.dart';
-import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart' as appSettings;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shimmer/shimmer.dart';
 
-
+import 'face_detection.dart';
+import 'stopwatch.dart';
 
 class CheckInCheckOutFormPage extends StatefulWidget {
   const CheckInCheckOutFormPage({super.key});
@@ -23,11 +21,18 @@ class CheckInCheckOutFormPage extends StatefulWidget {
 }
 
 class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
-  List<Map<String, dynamic>> attendanceList = [];
-  List<Map<String, dynamic>> attendanceLists = [];
-  late String swipeDirection;
+  // UI state
+  bool isLoading = true;
+  bool _isProcessingDrag = false;
+  bool _locationSnackBarShown = false;
+  bool _locationUnavailableSnackBarShown = false;
+
+  // API / user
   late String baseUrl = '';
-  late Timer t;
+  late String getToken = '';
+  Map<String, dynamic> arguments = {};
+
+  // Employee card
   late String requestsEmpMyFirstName = '';
   late String requestsEmpMyLastName = '';
   late String requestsEmpMyBadgeId = '';
@@ -35,292 +40,106 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   late String requestsEmpProfile = '';
   late String requestsEmpMyWorkInfoId = '';
   late String requestsEmpMyShiftName = '';
-  bool clockCheckBool = false;
-  bool clockCheckedIn = false;
-  bool isLoading = true;
-  bool isCheckIn = false;
-  bool _isProcessingDrag = false;
-  String? checkInFormattedTime = '00:00';
-  String elapsedTimeString = '00:00:00';
-  String? checkOutFormattedTime = '00:00';
-  String? checkInFormattedTimeTopR;
-  String? workingTime = '00:00:00';
-  String? clockIn;
-  String? clockInTimes;
-  String? duration;
-  String? timeDisplay;
-  final StopwatchManager stopwatchManager = StopwatchManager();
-  final _controller = NotchBottomBarController(index: 1);
-  int maxCount = 5;
-  Map<String, dynamic> arguments = {};
-  Duration elapsedTime = Duration.zero;
+
+  // Attendance status (single-session)
+  bool hasAttendance = false; // attendance record exists for resolved attendance_date
+  bool hasCheckedIn = false; // first check-in exists
+  bool isCurrentlyCheckedIn = false; // checked-in but not checked-out
+  bool missingCheckIn = false; // checked-out exists but check-in missing
+
+  String attendanceDate = ''; // yyyy-mm-dd (resolved)
+  String? firstCheckIn;
+  String? lastCheckOut;
+  String workedHours = '00:00:00';
+
+  // Attendance photos
+  String? checkInImage;
+  String? checkOutImage;
+
+  // Location
   Position? userLocation;
-  Duration accumulatedDuration = Duration.zero;
-  bool _locationSnackBarShown = false;
-  bool _locationUnavailableSnackBarShown = false;
-  late String getToken = '';
 
+  // Timer
+  final StopwatchManager stopwatchManager = StopwatchManager();
 
+  // Bottom nav
+  final _controller = NotchBottomBarController(index: 1);
+
+  String get swipeDirection {
+    if (canCheckIn) return 'Swipe ➜ CHECK IN';
+    return (lastCheckOut != null) ? 'Swipe ⇦ UPDATE CHECK OUT' : 'Swipe ⇦ CHECK OUT';
+  }
+  bool get canCheckIn => !hasAttendance;
+  bool get canCheckOut => hasAttendance; // allow updating last checkout multiple times
 
   @override
   void initState() {
     super.initState();
-    fetchToken();
-    swipeDirection = 'Swipe to Check-In';
     _initializeData();
-    if (clockCheckedIn) {
-      getCheckIn().then((_) {
-        setState(() {
-          if (clockIn != 'false' && duration != null) {
-            Duration? initialDuration = parseDuration(duration!);
-            if (initialDuration != null) {
-              accumulatedDuration = initialDuration;
-              stopwatchManager.startStopwatch(initialTime: initialDuration);
-              elapsedTimeString = formatDuration(initialDuration);
-              workingTime = formatDuration(initialDuration);
-              _saveAccumulatedDuration(initialDuration);
-            }
-          }
-        });
-      });
-    }
-  }
-
-  Future<void> fetchToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    setState(() {
-      getToken = token ?? '';
-      print('token: $getToken');
-    });
   }
 
   Future<void> _initializeData() async {
     try {
-      var face_detection = await getFaceDetection();
+      await fetchToken();
+
+      // Initialize feature flags
+      final faceDetectionEnabled = await getFaceDetection();
       final prefs = await SharedPreferences.getInstance();
-      prefs.remove('face_detection');
-      prefs.setBool("face_detection", face_detection);
+      await prefs.setBool('face_detection', faceDetectionEnabled);
+
       await _initializeLocation();
+
       await Future.wait<void>([
-        prefetchData(),
-        _loadClockState(),
         getBaseUrl(),
+        prefetchData(),
         getLoginEmployeeRecord(),
-        getCheckIn(),
+        refreshAttendanceStatus(),
       ]);
-      // Initialize stopwatch with server duration if checked in
-      accumulatedDuration = await _loadAccumulatedDuration();
-      if (clockIn != 'false' && duration != null) {
-        Duration? initialDuration = parseDuration(duration!);
-        if (initialDuration != null) {
-          accumulatedDuration = initialDuration;
-          print('Initializing stopwatch with duration: $initialDuration');
-          stopwatchManager.startStopwatch(initialTime: initialDuration);
-          elapsedTimeString = formatDuration(initialDuration);
-          workingTime = formatDuration(initialDuration);
-          await _saveAccumulatedDuration(initialDuration);
-        }
-      }
-      setState(() {
-        isLoading = false;
-      });
+
+      if (!mounted) return;
+      setState(() => isLoading = false);
     } catch (e) {
-      print('Error initializing data: $e');
+      debugPrint('Error initializing data: $e');
+      if (!mounted) return;
+      setState(() => isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to initialize data: $e')),
       );
     }
   }
 
-  Future<void> _saveAccumulatedDuration(Duration duration) async {
+  Future<void> fetchToken() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('accumulated_duration_seconds', duration.inSeconds);
+    final token = prefs.getString('token');
+    setState(() => getToken = token ?? '');
   }
 
-  Future<void> _initializeLocation() async {
+  Future<void> getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    var geo_fencing = prefs.getBool("geo_fencing");
-    if (geo_fencing == true) {
-      try {
-        bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-        if (!serviceEnabled && geo_fencing == true) {
-          if (!_locationSnackBarShown) {
-            _locationSnackBarShown = true;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Text('Location services are disabled. Please enable them.'),
-                action: SnackBarAction(
-                  label: 'Enable',
-                  onPressed: () {
-                    Geolocator.openLocationSettings();
-                  },
-                ),
-              ),
-            );
-          }
-          return;
-        }
-
-        LocationPermission permission = await Geolocator.checkPermission();
-        if (permission == LocationPermission.denied) {
-          permission = await Geolocator.requestPermission();
-          if (permission == LocationPermission.denied) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Location permissions are denied.')),
-            );
-            return;
-          }
-        }
-
-        if (permission == LocationPermission.deniedForever) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Location permissions are permanently denied.'),
-              action: SnackBarAction(
-                label: 'Settings',
-                onPressed: () {
-                  AppSettings.openAppSettings();
-                },
-              ),
-            ),
-          );
-          return;
-        }
-
-        Position position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-        );
-        setState(() {
-          userLocation = position;
-          print('Initialized userLocation: $userLocation');
-        });
-      } catch (e) {
-        print('Error fetching location: $e');
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to get location: $e')),
-        );
-      }
-    }
-  }
-
-  @override
-  void didChangeDependencies() async {
-    super.didChangeDependencies();
-    await getCheckIn();
-    if (clockIn != 'false') {
-      isCheckIn = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        setState(() {
-          clockCheckedIn = true;
-          clockCheckBool = true;
-          DateTime now = DateTime.now();
-          timeDisplay = clockIn;
-          checkInFormattedTimeTopR = DateFormat('h:mm').format(now);
-          Duration clockInTime = Duration.zero;
-          String? clockTimeString = duration;
-          if (clockTimeString != null) {
-            List<String> timeComponents = clockTimeString.split(':');
-            int hours = int.parse(timeComponents[0]);
-            int minutes = int.parse(timeComponents[1]);
-            int seconds = int.parse(timeComponents[2].split('.')[0]);
-            clockInTime = Duration(hours: hours, minutes: minutes, seconds: seconds);
-          }
-          stopwatchManager.startStopwatch(initialTime: clockInTime);
-          _saveClockState(clockCheckedIn, 1, checkInFormattedTime.toString());
-          swipeDirection = 'Swipe to Check-out';
-        });
-      });
-    } else {
-      isCheckIn = false;
-      clockCheckedIn = false;
-      clockCheckBool = false;
-      timeDisplay = clockInTimes;
-      Duration clockInTime = Duration.zero;
-      String? clockTimeString = duration;
-      elapsedTimeString = duration ?? '';
-      if (clockTimeString != null) {
-        List<String> timeComponents = clockTimeString.split(':');
-        int hours = int.parse(timeComponents[0]);
-        int minutes = int.parse(timeComponents[1]);
-        int seconds = int.parse(timeComponents[2].split('.')[0]);
-        clockInTime = Duration(hours: hours, minutes: minutes, seconds: seconds);
-        elapsedTime = clockInTime;
-      }
-      swipeDirection = 'Swipe to Check-In';
-    }
-  }
-
-  Future<void> getCheckIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/attendance/checking-in');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      var responseBody = jsonDecode(response.body);
-      if (responseBody['status'] == true) {
-        setState(() {
-          clockIn = true.toString();
-          clockIn = responseBody['clock_in'];
-          duration = responseBody['duration'];
-        });
-      } else {
-        setState(() {
-          clockIn = false.toString();
-          clockInTimes = responseBody['clock_in_time'];
-          duration = responseBody['duration'];
-        });
-      }
-    }
-  }
-
-  Future<Duration> _loadAccumulatedDuration() async {
-    final prefs = await SharedPreferences.getInstance();
-    int seconds = prefs.getInt('accumulated_duration_seconds') ?? 0;
-    return Duration(seconds: seconds);
-  }
-
-  Duration? parseDuration(String durationString) {
-    try {
-      List<String> parts = durationString.split(':');
-      if (parts.length >= 3) {
-        int hours = int.parse(parts[0]);
-        int minutes = int.parse(parts[1]);
-        String secondsPart = parts[2].split('.')[0];
-        int seconds = int.parse(secondsPart);
-        return Duration(hours: hours, minutes: minutes, seconds: seconds);
-      }
-      print('Invalid duration format: $durationString');
-      return Duration.zero;
-    } catch (e) {
-      print('Error parsing duration "$durationString": $e');
-      return Duration.zero;
-    }
+    final typedServerUrl = prefs.getString('typed_url');
+    final raw = (typedServerUrl ?? '').trim();
+    setState(() => baseUrl = raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw);
   }
 
   Future<void> prefetchData() async {
     final prefs = await SharedPreferences.getInstance();
-    var geo_fencing = prefs.getBool("geo_fencing");
-    if (geo_fencing == true) {
-      userLocation = await fetchCurrentLocation();
-    }
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var employeeId = prefs.getInt("employee_id");
-    var uri = Uri.parse('$typedServerUrl/api/employee/employees/$employeeId');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
+    final employeeId = prefs.getInt('employee_id');
+
+    if (token == null || typedServerUrl == null || employeeId == null) return;
+
+    final uri = Uri.parse('$typedServerUrl/api/employee/employees/$employeeId');
+    final response = await http.get(uri, headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
     });
+
     if (response.statusCode == 200) {
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] + ' ' + responseData['employee_last_name'],
+        'employee_name': '${responseData['employee_first_name']} ${responseData['employee_last_name']}',
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -338,194 +157,930 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         'emergency_contact_name': responseData['emergency_contact_name'],
         'employee_work_info_id': responseData['employee_work_info_id'],
         'employee_bank_details_id': responseData['employee_bank_details_id'],
-        'employee_profile': responseData['employee_profile']
+        'employee_profile': responseData['employee_profile'],
       };
     }
   }
 
-  _loadClockState() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      clockCheckedIn = prefs.getBool('clockCheckedIn') ?? false;
-      checkInFormattedTime = prefs.getString('checkin') ?? '00:00';
-      checkOutFormattedTime = prefs.getString('checkout') ?? '00:00';
-    });
-  }
-
-  _saveClockState(bool isCheckedIn, int option, [String? check]) async {
-    final prefs = await SharedPreferences.getInstance();
-    prefs.setBool('clockCheckedIn', isCheckedIn);
-    if (check != null && option == 2) {
-      prefs.setString('checkout', check);
-    } else {
-      prefs.setString('checkin', check!);
-    }
-  }
-
-  @override
-  void dispose() {
-    // t.cancel();
-    super.dispose();
-  }
-
-  Future<void> getBaseUrl() async {
-    final prefs = await SharedPreferences.getInstance();
-    var typedServerUrl = prefs.getString("typed_url");
-    setState(() {
-      baseUrl = typedServerUrl ?? '';
-    });
-  }
-
   Future<void> getLoginEmployeeRecord() async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var employeeId = prefs.getInt("employee_id");
-    var uri = Uri.parse('$typedServerUrl/api/employee/employees/$employeeId');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
+    final employeeId = prefs.getInt('employee_id');
+
+    if (token == null || typedServerUrl == null || employeeId == null) return;
+
+    final uri = Uri.parse('$typedServerUrl/api/employee/employees/$employeeId');
+    final response = await http.get(uri, headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
     });
+
     if (response.statusCode == 200) {
-      var responseBody = jsonDecode(response.body);
+      final responseBody = jsonDecode(response.body);
       setState(() {
         requestsEmpMyFirstName = responseBody['employee_first_name'] ?? '';
         requestsEmpMyLastName = responseBody['employee_last_name'] ?? '';
         requestsEmpMyBadgeId = responseBody['badge_id'] ?? '';
         requestsEmpMyDepartment = responseBody['department_name'] ?? '';
         requestsEmpProfile = responseBody['employee_profile'] ?? '';
-        requestsEmpMyWorkInfoId = responseBody['employee_work_info_id'] ?? '';
+        requestsEmpMyWorkInfoId = (responseBody['employee_work_info_id'] ?? '').toString();
       });
-      getLoginEmployeeWorkInfoRecord(requestsEmpMyWorkInfoId);
+
+      if (requestsEmpMyWorkInfoId.isNotEmpty) {
+        await getLoginEmployeeWorkInfoRecord(requestsEmpMyWorkInfoId);
+      }
     }
   }
 
-  Future<void> getLoginEmployeeWorkInfoRecord(String requestsEmpMyWorkInfoId) async {
+  Future<void> getLoginEmployeeWorkInfoRecord(String workInfoId) async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/employee/employee-work-information/$requestsEmpMyWorkInfoId');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
+
+    if (token == null || typedServerUrl == null) return;
+
+    final uri = Uri.parse('$typedServerUrl/api/employee/employee-work-information/$workInfoId');
+    final response = await http.get(uri, headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
     });
+
     if (response.statusCode == 200) {
-      var responseBody = jsonDecode(response.body);
+      final responseBody = jsonDecode(response.body);
       setState(() {
-        var shiftName = responseBody['shift_name'];
-        requestsEmpMyShiftName = shiftName ?? "None";
-        isLoading = false;
+        requestsEmpMyShiftName = (responseBody['shift_name'] ?? 'None').toString();
       });
     }
   }
 
-  Future<Position?> fetchCurrentLocation() async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return null;
+  Future<void> _initializeLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    final geoFencing = prefs.getBool('geo_fencing') ?? false;
+    if (!geoFencing) return;
 
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return null;
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!_locationSnackBarShown && mounted) {
+          _locationSnackBarShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Location services are disabled. Please enable them.'),
+              action: SnackBarAction(
+                label: 'Enable',
+                onPressed: () => Geolocator.openLocationSettings(),
+              ),
+            ),
+          );
+        }
+        return;
       }
 
-      if (permission == LocationPermission.deniedForever) return null;
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location permissions are denied.')),
+          );
+          return;
+        }
+      }
 
-      return await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      if (permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Location permissions are permanently denied.'),
+            action: SnackBarAction(
+              label: 'Settings',
+              onPressed: () => appSettings.openAppSettings(),
+            ),
+          ),
+        );
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      setState(() => userLocation = position);
     } catch (e) {
-      print('Error fetching location: $e');
-      return null;
+      debugPrint('Error fetching location: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to get location: $e')),
+      );
     }
   }
 
   Future<bool> getFaceDetection() async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
 
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    if (token == null || typedServerUrl == null) return false;
+
+    final uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
+    final response = await http.get(uri, headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
     });
 
     if (response.statusCode == 200) {
-      var data = jsonDecode(response.body);
-      bool isEnabled = data['start'] ?? false;
-      return isEnabled;
+      final data = jsonDecode(response.body);
+      return (data['start'] ?? false) == true;
+    }
+
+    return false;
+  }
+
+  Future<void> refreshAttendanceStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
+
+    if (token == null || typedServerUrl == null) return;
+
+    final uri = Uri.parse('$typedServerUrl/api/attendance/checking-in');
+    final response = await http.get(uri, headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    });
+
+    if (response.statusCode != 200) {
+      debugPrint('Failed to fetch attendance status: ${response.statusCode} ${response.body}');
+      return;
+    }
+
+    final data = jsonDecode(response.body);
+
+    final bool statusFlag = (data['status'] ?? false) == true;
+    final bool hasAttendanceFlag = (data['has_attendance'] ?? false) == true;
+
+    final String? first = (data['first_check_in'] ?? data['clock_in'] ?? data['clock_in_time'])?.toString();
+    final String? last = (data['last_check_out'])?.toString();
+
+    final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
+
+
+
+    final String? inImgRaw = (data['check_in_image'] ??
+            data['clock_in_image'] ??
+            data['attendance_clock_in_image'])
+        ?.toString();
+    final String? outImgRaw = (data['check_out_image'] ??
+            data['clock_out_image'] ??
+            data['attendance_clock_out_image'])
+        ?.toString();
+
+    final String attDate = (data['attendance_date'] ?? '').toString();
+
+    final bool missingIn = (data['missing_check_in'] ?? false) == true;
+    final bool hasIn = (data['has_checked_in'] ?? ((first ?? '').trim().isNotEmpty)) == true;
+
+    setState(() {
+      isCurrentlyCheckedIn = statusFlag;
+      hasAttendance = hasAttendanceFlag || ((first ?? '').trim().isNotEmpty) || ((last ?? '').trim().isNotEmpty);
+      hasCheckedIn = hasIn;
+      missingCheckIn = missingIn;
+      attendanceDate = attDate;
+      firstCheckIn = (first != null && first.trim().isNotEmpty) ? first : null;
+      lastCheckOut = (last != null && last.trim().isNotEmpty && last.trim().toLowerCase() != 'null') ? last : null;
+      workedHours = hours;
+      checkInImage = _cleanNullablePath(inImgRaw);
+      checkOutImage = _cleanNullablePath(outImgRaw);
+    });
+
+    // Sync stopwatch
+    final initial = _parseDuration(workedHours);
+    if (isCurrentlyCheckedIn) {
+      stopwatchManager.resetStopwatch();
+      stopwatchManager.startStopwatch(initialTime: initial);
     } else {
-      print('Failed to get face detection setup');
-      return false;
+      stopwatchManager.resetStopwatch();
     }
   }
 
+  Duration _parseDuration(String durationString) {
+    try {
+      final raw = durationString.trim();
+      if (raw.isEmpty) return Duration.zero;
+      final parts = raw.split(':');
+      if (parts.length < 2) return Duration.zero;
+      final int hours = int.tryParse(parts[0]) ?? 0;
+      final int minutes = int.tryParse(parts[1]) ?? 0;
+      int seconds = 0;
+      if (parts.length >= 3) {
+        seconds = int.tryParse(parts[2].split('.').first) ?? 0;
+      }
+      return Duration(hours: hours, minutes: minutes, seconds: seconds);
+    } catch (_) {
+      return Duration.zero;
+    }
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    return '${twoDigits(duration.inHours)}:${twoDigits(duration.inMinutes.remainder(60))}:${twoDigits(duration.inSeconds.remainder(60))}';
+  }
+
+
+  String? _cleanNullablePath(String? raw) {
+    if (raw == null) return null;
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    if (s.toLowerCase() == 'null') return null;
+    return s;
+  }
+
+  String _absoluteUrl(String path) {
+    final b = baseUrl.trim();
+    if (b.isEmpty) return path;
+    final base = b.endsWith('/') ? b.substring(0, b.length - 1) : b;
+
+    var p = path.trim();
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    if (!p.startsWith('/')) p = '/$p';
+    return '$base$p';
+  }
+
+  void _openPhotoViewer({required String title, required String url}) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              color: Colors.black87,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close, color: Colors.white),
+                  ),
+                ],
+              ),
+            ),
+            Flexible(
+              child: InteractiveViewer(
+                child: Image.network(
+                  url,
+                  headers: {'Authorization': 'Bearer $getToken'},
+                  fit: BoxFit.contain,
+                  errorBuilder: (_, __, ___) => const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Text('Failed to load image'),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _photoTile({required String label, required String? imagePath}) {
+    final hasImage = imagePath != null && imagePath.trim().isNotEmpty;
+
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: hasImage
+                ? () => _openPhotoViewer(
+                      title: label,
+                      url: _absoluteUrl(imagePath!),
+                    )
+                : null,
+            child: Container(
+              height: 86,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: Colors.grey.shade100,
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: hasImage
+                    ? Image.network(
+                        _absoluteUrl(imagePath!),
+                        headers: {'Authorization': 'Bearer $getToken'},
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => const Center(child: Icon(Icons.broken_image)),
+                      )
+                    : const Center(child: Text('No photo')),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotosCard() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10.0),
+          color: Colors.white,
+          border: Border.all(color: Colors.grey.shade300, width: 0.0),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.shade50.withOpacity(0.3),
+              spreadRadius: 7,
+              blurRadius: 1,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Photos', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  _photoTile(label: 'Check-In', imagePath: checkInImage),
+                  const SizedBox(width: 12),
+                  _photoTile(label: 'Check-Out', imagePath: checkOutImage),
+                ],
+              ),
+              const SizedBox(height: 6),
+              const Text('Tap a photo to view', style: TextStyle(fontSize: 11, color: Colors.black45)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _extractErrorMessage(String responseBody) {
+    try {
+      final decoded = json.decode(responseBody);
+      if (decoded is Map) {
+        final msg = decoded['error'] ?? decoded['message'] ?? decoded['detail'];
+        final lastAllowed = decoded['last_allowed'];
+        if (msg != null && lastAllowed != null) {
+          return '${msg.toString()} (Last allowed: ${lastAllowed.toString()})';
+        }
+        if (msg != null) return msg.toString();
+        if (decoded.isNotEmpty) return decoded.toString();
+      }
+      return responseBody;
+    } catch (_) {
+      return responseBody;
+    }
+  }
+
+  void showActionFailedDialog(BuildContext context, String title, String errorMessage) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(errorMessage),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<Map<String, dynamic>?> _postClock({required bool isClockIn}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
+    final geoFencing = prefs.getBool('geo_fencing') ?? false;
+
+    if (token == null || typedServerUrl == null) return null;
+
+    final endpoint = isClockIn ? '/api/attendance/clock-in/' : '/api/attendance/clock-out/';
+    final uri = Uri.parse('$typedServerUrl$endpoint');
+
+    Map<String, dynamic> body = {};
+    if (geoFencing) {
+      if (userLocation == null) {
+        if (!_locationUnavailableSnackBarShown && mounted) {
+          _locationUnavailableSnackBarShown = true;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
+          );
+        }
+        return null;
+      }
+      body = {
+        'latitude': userLocation!.latitude,
+        'longitude': userLocation!.longitude,
+      };
+    }
+
+    final response = await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode(body),
+    );
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      try {
+        return jsonDecode(response.body);
+      } catch (_) {
+        return {};
+      }
+    }
+
+    if (!mounted) return null;
+    showActionFailedDialog(context, isClockIn ? 'Check-in Failed' : 'Check-out Failed', _extractErrorMessage(response.body));
+    return null;
+  }
+
+  Future<void> _doClockIn() async {
+    if (!canCheckIn) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final faceDetection = prefs.getBool('face_detection') ?? false;
+
+    if (faceDetection) {
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FaceScanner(
+            userLocation: userLocation,
+            userDetails: arguments,
+            attendanceState: 'NOT_CHECKED_IN',
+          ),
+        ),
+      );
+
+      if (result != null && result['checkedIn'] == true) {
+        await refreshAttendanceStatus();
+      }
+      return;
+    }
+
+    final res = await _postClock(isClockIn: true);
+    if (res != null) {
+      await refreshAttendanceStatus();
+    }
+  }
+
+  Future<void> _doClockOut() async {
+    if (!canCheckOut) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final faceDetection = prefs.getBool('face_detection') ?? false;
+
+    if (faceDetection) {
+      final result = await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FaceScanner(
+            userLocation: userLocation,
+            userDetails: arguments,
+            attendanceState: 'CHECKED_IN',
+          ),
+        ),
+      );
+
+      if (result != null && result['checkedOut'] == true) {
+        final bool missing = (result['missing_check_in'] ?? false) == true;
+        await refreshAttendanceStatus();
+        if (missing && mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.')),
+          );
+        }
+      }
+      return;
+    }
+
+    final res = await _postClock(isClockIn: false);
+    if (res != null) {
+      final bool missing = (res['missing_check_in'] ?? false) == true;
+      await refreshAttendanceStatus();
+      if (missing && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.')),
+        );
+      }
+    }
+  }
 
   Future<void> clearToken() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
   }
 
-  String getErrorMessage(String responseBody) {
-    try {
-      final Map<String, dynamic> decoded = json.decode(responseBody);
-      return decoded['message'] ?? 'Unknown error occurred';
-    } catch (e) {
-      return 'Error parsing server response';
-    }
-  }
-
-  Future<void> postCheckout() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/attendance/clock-out/');
-    var response = await http.post(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      setState(() {});
-    }
-  }
-
-  Future<void> postCheckIn() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/attendance/clock-in/');
-    var response = await http.post(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      setState(() {});
-    }
-  }
-
-  void showCheckInFailedDialog(BuildContext context, String errorMessage) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Check-in Failed'),
-          content: Text(errorMessage),
-          actions: <Widget>[
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (context) => HomePage()),
-                );
-              },
-              child: const Text('OK'),
+  Widget _buildLoadingWidget() {
+    return ListView(
+      children: [
+        Container(
+          color: Colors.red,
+          height: MediaQuery.of(context).size.height * 0.25,
+          child: const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+                Text('00:00:00', style: TextStyle(color: Colors.white)),
+              ],
             ),
-          ],
-        );
-      },
+          ),
+        ),
+        const SizedBox(height: 16),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20.0),
+          child: Shimmer.fromColors(
+            baseColor: Colors.grey[300]!,
+            highlightColor: Colors.grey[100]!,
+            child: Container(
+              height: 180,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10.0),
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
+  Widget _headerStat({required String label, required Widget value}) {
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            const SizedBox(height: 4),
+            value,
+          ],
+        ),
+      ),
+    );
+  }
+
+  
+  Widget _buildHeader() {
+    DateTime? parsedDate;
+    if (attendanceDate.trim().isNotEmpty) {
+      try {
+        parsedDate = DateTime.parse(attendanceDate);
+      } catch (_) {}
+    }
+
+    final dateLabel =
+        DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
+    final String firstText =
+        missingCheckIn ? '-' : (firstCheckIn ?? '-');
+    final String lastText = lastCheckOut ?? '-';
+
+    return Container(
+      color: Colors.red,
+      padding: const EdgeInsets.all(16.0),
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Attendance',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
+                Text(dateLabel, style: const TextStyle(color: Colors.white70)),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                _headerStat(
+                  label: 'First Check-In',
+                  value: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        firstText,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
+                      ),
+                      if (missingCheckIn)
+                        const Text(
+                          'Missing check-in',
+                          style: TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                    ],
+                  ),
+                ),
+                _headerStat(
+                  label: 'Last Check-Out',
+                  value: Text(
+                    lastText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
+                ),
+                _headerStat(
+                  label: 'Work Hours',
+                  value: (!hasAttendance || missingCheckIn)
+                      ? const Text(
+                          '-',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 18,
+                          ),
+                        )
+                      : (isCurrentlyCheckedIn
+                          ? StreamBuilder<int>(
+                              stream: Stream.periodic(
+                                const Duration(seconds: 1),
+                                (_) => stopwatchManager.elapsed.inSeconds,
+                              ),
+                              builder: (context, snapshot) {
+                                final d = stopwatchManager.elapsed;
+                                return Text(
+                                  _formatDuration(d),
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 18,
+                                  ),
+                                );
+                              },
+                            )
+                          : Text(
+                              workedHours,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 18,
+                              ),
+                            )),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (!hasAttendance)
+              const Text(
+                'No attendance record yet for today.',
+                style: TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _buildEmployeeCard() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8.0),
+          color: Colors.white,
+          border: Border.all(color: Colors.grey.shade300, width: 0.0),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.grey.shade50.withOpacity(0.3),
+              spreadRadius: 7,
+              blurRadius: 1,
+              offset: const Offset(0, 1),
+            ),
+          ],
+        ),
+        width: MediaQuery.of(context).size.width * 0.50,
+        child: Card(
+          shape: RoundedRectangleBorder(
+            side: const BorderSide(color: Colors.white, width: 0.0),
+            borderRadius: BorderRadius.circular(10.0),
+          ),
+          color: Colors.white,
+          elevation: 0.1,
+          child: Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Container(
+                      width: 40.0,
+                      height: 40.0,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.grey, width: 1.0),
+                      ),
+                      child: Stack(
+                        children: [
+                          if (requestsEmpProfile.isNotEmpty)
+                            Positioned.fill(
+                              child: ClipOval(
+                                child: Image.network(
+                                  _absoluteUrl(requestsEmpProfile),
+                                  headers: {
+                                    'Authorization': 'Bearer $getToken',
+                                  },
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, exception, stackTrace) => const Icon(Icons.person, color: Colors.grey),
+                                ),
+                              ),
+                            ),
+                          if (requestsEmpProfile.isEmpty)
+                            Positioned.fill(
+                              child: Container(
+                                decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.grey[400]),
+                                child: const Icon(Icons.person),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(width: MediaQuery.of(context).size.width * 0.01),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$requestsEmpMyFirstName $requestsEmpMyLastName',
+                            style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(requestsEmpMyBadgeId, style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.normal)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Department'),
+                      Flexible(child: Text(requestsEmpMyDepartment, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('First Check-In'),
+                      Text(missingCheckIn ? '-' : (firstCheckIn ?? '-')),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Last Check-Out'),
+                      Text(lastCheckOut ?? '-'),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('Shift'),
+                      Flexible(child: Text(requestsEmpMyShiftName, overflow: TextOverflow.ellipsis)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSwipeAction() {
+    return GestureDetector(
+      onPanUpdate: (details) async {
+        if (_isProcessingDrag) return;
+        if (details.delta.dx.abs() <= details.delta.dy.abs() || details.delta.dx.abs() <= 10) return;
+
+        _isProcessingDrag = true;
+
+        if (details.delta.dx > 0) {
+          // Swipe right => check-in
+          await _doClockIn();
+        } else {
+          // Swipe left => check-out
+          await _doClockOut();
+        }
+      },
+      onPanEnd: (_) {
+        _isProcessingDrag = false;
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20.0),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.95,
+          height: MediaQuery.of(context).size.height * 0.07,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8.0),
+            color: canCheckIn ? Colors.green : Colors.red,
+          ),
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              if (canCheckIn)
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Container(
+                    width: MediaQuery.of(context).size.width * 0.12,
+                    height: MediaQuery.of(context).size.height * 0.06,
+                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
+                    child: const Icon(Icons.arrow_forward, color: Colors.green, size: 30.0),
+                  ),
+                ),
+              Expanded(
+                child: Center(
+                  child: Text(
+                    swipeDirection,
+                    style: const TextStyle(color: Colors.white, fontSize: 15.0, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              if (!canCheckIn)
+                Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Container(
+                    width: MediaQuery.of(context).size.width * 0.12,
+                    height: MediaQuery.of(context).size.height * 0.06,
+                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
+                    child: const Icon(Icons.arrow_back, color: Colors.red, size: 30.0),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCheckInCheckoutWidget() {
+    return ListView(
+      children: [
+        _buildHeader(),
+        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
+        _buildEmployeeCard(),
+        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
+        _buildPhotosCard(),
+        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
+        _buildSwipeAction(),
+      ],
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -540,12 +1095,13 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
             onPressed: () async {
               await clearToken();
               stopwatchManager.resetStopwatch();
+              if (!mounted) return;
               Navigator.pushReplacementNamed(context, '/login');
             },
           ),
         ],
       ),
-      body: isLoading ? _buildLoadingWidget() : _buildCheckInCheckoutWidget(getToken),
+      body: isLoading ? _buildLoadingWidget() : _buildCheckInCheckoutWidget(),
       bottomNavigationBar: AnimatedNotchBottomBar(
         notchBottomBarController: _controller,
         color: Colors.red,
@@ -573,17 +1129,17 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         onTap: (index) async {
           switch (index) {
             case 0:
-              Future.delayed(const Duration(milliseconds: 1000), () {
+              Future.delayed(const Duration(milliseconds: 300), () {
                 Navigator.pushNamed(context, '/home');
               });
               break;
             case 1:
-              Future.delayed(const Duration(milliseconds: 1000), () {
+              Future.delayed(const Duration(milliseconds: 300), () {
                 Navigator.pushNamed(context, '/employee_checkin_checkout');
               });
               break;
             case 2:
-              Future.delayed(const Duration(milliseconds: 1000), () {
+              Future.delayed(const Duration(milliseconds: 300), () {
                 Navigator.pushNamed(context, '/employees_form', arguments: arguments);
               });
               break;
@@ -591,752 +1147,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         },
       ),
     );
-  }
-
-  void storeCheckoutTime() {
-    elapsedTime = stopwatchManager.elapsed;
-    elapsedTimeString = elapsedTime.toString().split('.').first.padLeft(8, '0');
-  }
-
-  Widget _buildLoadingWidget() {
-    checkInFormattedTime = timeDisplay;
-    return ListView(
-      children: [
-        if (clockCheckBool || clockCheckedIn)
-          Container(
-            color: Colors.red,
-            height: MediaQuery.of(context).size.height * 0.25,
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text('Clock In', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
-                      Text('00:00:00', style: TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.05),
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            onPressed: () {},
-                            icon: const Icon(Icons.access_alarm),
-                            color: Colors.white,
-                            iconSize: 40,
-                          ),
-                          StreamBuilder<int>(
-                            stream: Stream.periodic(const Duration(milliseconds: 1), (_) {
-                              return stopwatchManager.elapsed.inMilliseconds;
-                            }),
-                            builder: (context, snapshot) {
-                              return Text(
-                                '${Duration(milliseconds: snapshot.data ?? 0)}'.substring(0, 7),
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 25),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Text('Clocked In: Today at ', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                          Text(
-                            checkInFormattedTime ?? DateFormat('h:mm').format(DateTime.now()) + (DateTime.now().hour < 12 ? ' AM' : ' PM'),
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          )
-        else
-          Container(
-            color: Colors.red,
-            height: MediaQuery.of(context).size.height * 0.25,
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Clock Out', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
-                      Text(elapsedTimeString, style: const TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.05),
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            onPressed: () {},
-                            icon: const Icon(Icons.access_alarm),
-                            color: Colors.white,
-                            iconSize: 40,
-                          ),
-                          Text(
-                            elapsedTimeString,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 25),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        // Shimmer loading placeholder remains unchanged
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Shimmer.fromColors(
-            baseColor: Colors.grey[300]!,
-            highlightColor: Colors.grey[100]!,
-            child: ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: 1,
-              itemBuilder: (context, index) {
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8.0),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      border: Border.all(color: Colors.grey[50]!),
-                      borderRadius: BorderRadius.circular(8.0),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.grey.shade400.withOpacity(0.3),
-                          spreadRadius: 2,
-                          blurRadius: 5,
-                          offset: const Offset(0, 3),
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Container(width: 90.0, height: 90.0, decoration: BoxDecoration(color: Colors.grey[300], shape: BoxShape.circle)),
-                              const SizedBox(width: 10.0),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Container(height: 20.0, color: Colors.grey[300]),
-                                    const SizedBox(height: 5.0),
-                                    Container(height: 120.0, width: 90.0, color: Colors.grey[300]),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 5.0),
-                          Container(height: 16.0, width: double.infinity, color: Colors.grey[300]),
-                          const SizedBox(height: 5.0),
-                          Container(height: 16.0, width: double.infinity, color: Colors.grey[300]),
-                          const SizedBox(height: 5.0),
-                          Container(height: 16.0, width: double.infinity, color: Colors.grey[300]),
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-        GestureDetector(
-          onHorizontalDragUpdate: (details) {
-            if (details.primaryDelta! < 0) {
-              setState(() {
-                clockCheckedIn = true;
-                swipeDirection = 'Swipe to Check-In';
-              });
-            } else if (details.primaryDelta! > 0) {
-              setState(() {
-                clockCheckedIn = true;
-                swipeDirection = 'Swipe to Check-out';
-              });
-            }
-          },
-          child: Padding(
-            padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 0.0, bottom: 8.0),
-            child: Shimmer.fromColors(
-              baseColor: Colors.grey[300]!,
-              highlightColor: Colors.grey[100]!,
-              child: Container(
-                width: MediaQuery.of(context).size.width * 0.95,
-                height: MediaQuery.of(context).size.height * 0.07,
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(15.0), color: Colors.grey),
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildCheckInCheckoutWidget(token) {
-    checkInFormattedTime = timeDisplay;
-    return ListView(
-      children: [
-        if (clockCheckBool || clockCheckedIn)
-          Container(
-            color: Colors.red,
-            height: MediaQuery.of(context).size.height * 0.25,
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('Clock In', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
-                        Text('00:00:00', style: TextStyle(color: Colors.white)),
-                      ],
-                    ),
-                    SizedBox(height: MediaQuery.of(context).size.height * 0.05),
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            IconButton(
-                              onPressed: () {},
-                              icon: const Icon(Icons.access_alarm),
-                              color: Colors.white,
-                              iconSize: 40,
-                            ),
-                            StreamBuilder<int>(
-                              stream: Stream.periodic(const Duration(milliseconds: 1), (_) {
-                                return stopwatchManager.elapsed.inMilliseconds;
-                              }),
-                              builder: (context, snapshot) {
-                                if (snapshot.hasData) {
-                                  int milliseconds = snapshot.data!;
-                                  Duration duration = Duration(milliseconds: milliseconds);
-                                  String formattedTime =
-                                      '${duration.inHours.toString().padLeft(2, '0')}:${(duration.inMinutes % 60).toString().padLeft(2, '0')}:${(duration.inSeconds % 60).toString().padLeft(2, '0')}';
-                                  return Text(
-                                    formattedTime,
-                                    textAlign: TextAlign.center,
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 25),
-                                  );
-                                }
-                                return const Text('00:00:00', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 25));
-                              },
-                            ),
-                          ],
-                        ),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text('Clocked In: Today at ', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)),
-                            Text(
-                              checkInFormattedTime ?? DateFormat('h:mm').format(DateTime.now()) + (DateTime.now().hour < 12 ? ' AM' : ' PM'),
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          )
-        else
-          Container(
-            color: Colors.red,
-            height: MediaQuery.of(context).size.height * 0.25,
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text('Clock Out', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
-                      Text(elapsedTimeString, style: const TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.05),
-                  Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          IconButton(
-                            onPressed: () {},
-                            icon: const Icon(Icons.access_alarm),
-                            color: Colors.white,
-                            iconSize: 40,
-                          ),
-                          Text(
-                            elapsedTimeString,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 25),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0),
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8.0),
-              color: Colors.white,
-              border: Border.all(color: Colors.grey.shade300, width: 0.0),
-              boxShadow: [
-                BoxShadow(color: Colors.grey.shade50.withOpacity(0.3), spreadRadius: 7, blurRadius: 1, offset: const Offset(0, 1)),
-              ],
-            ),
-            width: MediaQuery.of(context).size.width * 0.50,
-            height: MediaQuery.of(context).size.height * 0.3,
-            child: Card(
-              shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.white, width: 0.0), borderRadius: BorderRadius.circular(10.0)),
-              color: Colors.white,
-              elevation: 0.1,
-              child: Padding(
-                padding: const EdgeInsets.all(8.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Container(
-                          width: 40.0,
-                          height: 40.0,
-                          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.grey, width: 1.0)),
-                          child: Stack(
-                            children: [
-                              if (requestsEmpProfile.isNotEmpty)
-                                Positioned.fill(
-                                  child: ClipOval(
-                                    child: Image.network(
-                                      baseUrl + requestsEmpProfile,
-                                      headers: {
-                                        "Authorization": "Bearer $token",
-                                      },
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (context, exception, stackTrace) => const Icon(Icons.person, color: Colors.grey),
-                                    ),
-                                  ),
-                                ),
-                              if (requestsEmpProfile.isEmpty)
-                                Positioned.fill(
-                                  child: Container(
-                                    decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.grey[400]),
-                                    child: const Icon(Icons.person),
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                        SizedBox(width: MediaQuery.of(context).size.width * 0.01),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '$requestsEmpMyFirstName $requestsEmpMyLastName',
-                                style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              Text(requestsEmpMyBadgeId, style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.normal)),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    SizedBox(height: MediaQuery.of(context).size.height * 0.005),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Department'),
-                          Text(requestsEmpMyDepartment),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Check-In'),
-                          Text('$checkInFormattedTime'),
-                        ],
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text('Shift'),
-                          Text(requestsEmpMyShiftName),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        GestureDetector(
-          onPanUpdate: (details) async {
-            if (!_isProcessingDrag) {
-              final prefs = await SharedPreferences.getInstance();
-              var face_detection = prefs.getBool("face_detection");
-              var geo_fencing = prefs.getBool("geo_fencing");
-              if (face_detection == true) {
-                if (details.delta.dx.abs() > details.delta.dy.abs() && details.delta.dx.abs() > 10) {
-                  _isProcessingDrag = true;
-                  if (userLocation == null) {
-                    if (!_locationUnavailableSnackBarShown && geo_fencing == true) {
-                      _locationUnavailableSnackBarShown = true;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
-                      );
-                    }
-                    _isProcessingDrag = false;
-                  }
-                  if (details.delta.dx < 0 && clockCheckedIn) {
-                    // Check-out
-                    final result = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => FaceScanner(
-                          userLocation: userLocation,
-                          userDetails: arguments,
-                          attendanceState: 'CHECKED_IN',
-                        ),
-                      ),
-                    );
-                    if (result != null && result['checkedOut'] == true) {
-                      setState(() {
-                        isCheckIn = false;
-                        clockCheckedIn = false;
-                        stopwatchManager.stopStopwatch();
-                        storeCheckoutTime();
-                        Duration initialElapsedTime = stopwatchManager.elapsed;
-                        workingTime = formatDuration(initialElapsedTime);
-                        clockCheckBool = false;
-                        DateTime now = DateTime.now();
-                        checkOutFormattedTime = DateFormat('h:mm a').format(now);
-                        swipeDirection = 'Swipe to Check-In';
-                        _saveClockState(
-                            clockCheckedIn, 2, checkOutFormattedTime.toString());
-                      });
-                    }
-                  } else if (details.delta.dx > 0 && !clockCheckedIn) {
-                    // Check-in
-                    final result = await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => FaceScanner(
-                          userLocation: userLocation,
-                          userDetails: arguments,
-                          attendanceState: 'NOT_CHECKED_IN',
-                        ),
-                      ),
-                    );
-                    if (result != null && result['checkedIn'] == true) {
-                      setState(() {
-                        isCheckIn = true;
-                        clockCheckedIn = true;
-                        clockCheckBool = true;
-                        DateTime now = DateTime.now();
-                        checkInFormattedTime = DateFormat('h:mm a').format(now);
-                        checkInFormattedTimeTopR = DateFormat('h:mm').format(now);
-                        _saveClockState(
-                            clockCheckedIn, 1, checkInFormattedTime.toString());
-
-                        if (duration?.isNotEmpty ?? false) {
-                          String durationString = duration.toString();
-
-                          try {
-                            List<String> parts = durationString.split(':');
-                            if (parts.length == 3) {
-                              int hours = int.parse(parts[0]);
-                              int minutes = int.parse(parts[1]);
-                              int seconds = int.parse(parts[2]);
-                              Duration initialElapsedTime = Duration(
-                                  hours: hours, minutes: minutes, seconds: seconds);
-                              stopwatchManager.startStopwatch(
-                                  initialTime: initialElapsedTime);
-                            }
-                          } catch (e) {}
-                        } else {}
-
-                        swipeDirection = 'Swipe to Check-out';
-                      });
-                    }
-                  }
-                }
-              }
-              else if (geo_fencing == true) {
-                if (details.delta.dx.abs() > details.delta.dy.abs() && details.delta.dx.abs() > 10) {
-                  _isProcessingDrag = true;
-                  if (userLocation == null) {
-                    if (!_locationUnavailableSnackBarShown) {
-                      _locationUnavailableSnackBarShown = true;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
-                      );
-                    }
-                    _isProcessingDrag = false;
-                    return;
-                  }
-
-                  if (details.delta.dx < 0 && clockCheckedIn) {
-                    final prefs = await SharedPreferences.getInstance();
-                    var token = prefs.getString("token");
-                    var typedServerUrl = prefs.getString("typed_url");
-                    var geo_fencing = prefs.getBool("geo_fencing");
-                    var uri = Uri.parse('$typedServerUrl/api/attendance/clock-out/');
-                    var response_geofence = await http.post(
-                      uri,
-                      headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": "Bearer $token",
-                      },
-                      body: jsonEncode({
-                        "latitude": userLocation!.latitude,
-                        "longitude": userLocation!.longitude,
-                      }),
-                    );
-
-                    if (response_geofence.statusCode == 200) {
-                      setState(() {
-                        isCheckIn = false;
-                        clockCheckedIn = false;
-                        stopwatchManager.stopStopwatch();
-                        storeCheckoutTime();
-                        clockCheckBool = false;
-                        DateTime now = DateTime.now();
-                        checkOutFormattedTime = DateFormat('h:mm a').format(now);
-                        swipeDirection = 'Swipe to Check-In';
-                        _saveClockState(clockCheckedIn, 2, checkOutFormattedTime.toString());
-                      });
-                    } else {
-                      String errorMessage = getErrorMessage(response_geofence.body);
-                      showCheckInFailedDialog(context, errorMessage);
-                    }
-                  } else if (details.delta.dx > 0 && !clockCheckedIn) {
-                    final prefs = await SharedPreferences.getInstance();
-                    var token = prefs.getString("token");
-                    var typedServerUrl = prefs.getString("typed_url");
-                    var geo_fencing = prefs.getBool("geo_fencing");
-                    var uri = Uri.parse('$typedServerUrl/api/attendance/clock-in/');
-                    var response_geofence = await http.post(
-                      uri,
-                      headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": "Bearer $token",
-                      },
-                      body: jsonEncode({
-                        "latitude": userLocation!.latitude,
-                        "longitude": userLocation!.longitude,
-                      }),
-                    );
-
-                    if (response_geofence.statusCode == 200) {
-                      setState(() {
-                        isCheckIn = true;
-                        clockCheckedIn = true;
-                        clockCheckBool = true;
-                        DateTime now = DateTime.now();
-                        checkInFormattedTime = DateFormat('h:mm a').format(now);
-                        checkInFormattedTimeTopR = DateFormat('h:mm').format(now);
-                        _saveClockState(
-                            clockCheckedIn, 1, checkInFormattedTime.toString());
-
-                        if (duration?.isNotEmpty ?? false) {
-                          String durationString = duration.toString();
-
-                          try {
-                            List<String> parts = durationString.split(':');
-                            if (parts.length == 3) {
-                              int hours = int.parse(parts[0]);
-                              int minutes = int.parse(parts[1]);
-                              int seconds = int.parse(parts[2]);
-                              Duration initialElapsedTime = Duration(
-                                  hours: hours, minutes: minutes, seconds: seconds);
-                              stopwatchManager.startStopwatch(
-                                  initialTime: initialElapsedTime);
-                            }
-                          } catch (e) {}
-                        } else {}
-
-                        swipeDirection = 'Swipe to Check-out';
-                      });
-                    } else {
-                      String errorMessage = getErrorMessage(response_geofence.body);
-                      showCheckInFailedDialog(context, errorMessage);
-                    }
-                  }
-                }
-              }
-              else {
-                if (details.delta.dx.abs() > details.delta.dy.abs() &&
-                    details.delta.dx.abs() > 10) {
-                  _isProcessingDrag = true;
-                  if (details.delta.dx < 0) {
-                    setState(() {
-                      postCheckout();
-                      isCheckIn = false;
-                      clockCheckedIn = false;
-                      stopwatchManager.stopStopwatch();
-                      storeCheckoutTime();
-                      Duration initialElapsedTime = stopwatchManager.elapsed;
-                      workingTime = formatDuration(initialElapsedTime);
-                      clockCheckBool = false;
-                      DateTime now = DateTime.now();
-                      checkOutFormattedTime = DateFormat('h:mm a').format(now);
-                      swipeDirection = 'Swipe to Check-In';
-                      _saveClockState(
-                          clockCheckedIn, 2, checkOutFormattedTime.toString());
-                    });
-                  } else if (details.delta.dx > 0) {
-                    setState(() {
-                      postCheckIn();
-                      isCheckIn = true;
-                      clockCheckedIn = true;
-                      clockCheckBool = true;
-                      DateTime now = DateTime.now();
-                      checkInFormattedTime = DateFormat('h:mm a').format(now);
-                      checkInFormattedTimeTopR = DateFormat('h:mm').format(now);
-                      _saveClockState(
-                          clockCheckedIn, 1, checkInFormattedTime.toString());
-
-                      if (duration?.isNotEmpty ?? false) {
-                        String durationString = duration.toString();
-
-                        try {
-                          List<String> parts = durationString.split(':');
-                          if (parts.length == 3) {
-                            int hours = int.parse(parts[0]);
-                            int minutes = int.parse(parts[1]);
-                            int seconds = int.parse(parts[2]);
-                            Duration initialElapsedTime = Duration(
-                                hours: hours, minutes: minutes, seconds: seconds);
-                            stopwatchManager.startStopwatch(
-                                initialTime: initialElapsedTime);
-                          }
-                        } catch (e) {}
-                      } else {}
-
-                      swipeDirection = 'Swipe to Check-out';
-                    });
-                  }
-                }
-              }
-            }
-          },
-          onPanEnd: (details) {
-            _isProcessingDrag = false;
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: Container(
-              width: MediaQuery.of(context).size.width * 0.95,
-              height: MediaQuery.of(context).size.height * 0.07,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(8.0),
-                color: clockCheckedIn ? Colors.red : Colors.green,
-              ),
-              alignment: Alignment.center,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  // Show forward arrow only when NOT checked in
-                  if (!clockCheckedIn)
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        width: MediaQuery.of(context).size.width * 0.12,
-                        height: MediaQuery.of(context).size.height * 0.06,
-                        decoration: BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
-                        child: const Icon(Icons.arrow_forward, color: Colors.green, size: 30.0),
-                      ),
-                    ),
-
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        swipeDirection,
-                        style: const TextStyle(color: Colors.white, fontSize: 15.0, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  ),
-
-                  // Show backward arrow only when checked in
-                  if (clockCheckedIn)
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Container(
-                        width: MediaQuery.of(context).size.width * 0.12,
-                        height: MediaQuery.of(context).size.height * 0.06,
-                        decoration: BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
-                        child: const Icon(Icons.arrow_back, color: Colors.red, size: 30.0),
-                      ),
-                    )
-                ],
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  String formatDuration(Duration duration) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
-    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
-    return "${twoDigits(duration.inHours)}:$twoDigitMinutes:$twoDigitSeconds";
   }
 }
 
