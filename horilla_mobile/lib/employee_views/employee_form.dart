@@ -691,7 +691,11 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
   Future<void> clearToken() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('token');
+
+    // Remove auth token
+    await prefs.clear();
+    // Use replacement so user can't go back into Home
+    Navigator.pushReplacementNamed(context, "/login");
   }
 
   Future<void> getEmployees() async {
@@ -3536,7 +3540,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
               color: Colors.white,
               onPressed: () async {
                 await clearToken();
-                Navigator.pushNamed(context, '/login');
               },
             ),
           ),
