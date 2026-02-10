@@ -93,48 +93,124 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     }
   }
 
-  Future<void> _fetchBiometricImage() async {
-    if (_isFetchingImage) return;
-    setState(() => _isFetchingImage = true);
-
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString("token");
-    final typedServerUrl = prefs.getString("typed_url");
-    final faceDetectionImage = prefs.getString("face_detection_image");
-    final imagePath = prefs.getString("imagePath");
-
-    if (token == null || typedServerUrl == null || faceDetectionImage == '' || imagePath == null) {
-      if (mounted) showImageAlertDialog(context);
-      return;
+  /// Ensures `face_detection_image` exists in SharedPreferences.
+  /// - If already cached -> return it
+  /// - If not cached -> call GET /api/facedetection/setup/
+  ///   - 200 -> read `image`, store to prefs, return it
+  ///   - 404 -> user never setup -> return null (caller should show setup dialog)
+  ///   - others -> throw exception
+  Future<String?> _ensureFaceDetectionImageCached({
+    required SharedPreferences prefs,
+    required String token,
+    required String baseUrl,
+  }) async {
+    // 1) Use cached value if exists
+    final cached = prefs.getString("face_detection_image");
+    if (cached != null && cached.trim().isNotEmpty) {
+      return cached.trim();
     }
 
-    try {
-      // --- Build image URL ---
-      String? imageUrl;
-      final cleanedServerUrl = typedServerUrl.endsWith('/')
-          ? typedServerUrl.substring(0, typedServerUrl.length - 1)
-          : typedServerUrl;
+    // 2) Not cached -> ask server
+    final setupUri = Uri.parse("$baseUrl/api/facedetection/setup/");
+    final setupRes = await http.get(
+      setupUri,
+      headers: {
+        "Authorization": "Bearer $token",
+        "Accept": "application/json",
+      },
+    );
 
-      if (faceDetectionImage != null) {
-        final cleanedPath = faceDetectionImage.startsWith('/')
-            ? faceDetectionImage.substring(1)
-            : faceDetectionImage;
-        imageUrl = '$cleanedServerUrl/$cleanedPath';
-      } else if (imagePath != null) {
-        final cleanedPath = imagePath.startsWith('/')
-            ? imagePath.substring(1)
-            : imagePath;
-        imageUrl = '$cleanedServerUrl/media/$cleanedPath';
+    if (setupRes.statusCode >= 200 && setupRes.statusCode < 300) {
+      try {
+        final data = jsonDecode(setupRes.body);
+        var image = (data["image"] ?? "").toString().trim();
+
+        if (image.isEmpty) return null;
+
+        // Normalize path: ensure it starts with "/" when it's not a full URL
+        if (!image.startsWith("http://") &&
+            !image.startsWith("https://") &&
+            !image.startsWith("/")) {
+          image = "/$image";
+        }
+
+        await prefs.setString("face_detection_image", image);
+
+        // Remove legacy key so old logic never blocks again
+        await prefs.remove("imagePath");
+
+        return image;
+      } catch (_) {
+        // Response is not JSON or unexpected
+        return null;
       }
+    }
 
-      if (imageUrl == null) {
+    if (setupRes.statusCode == 404) {
+      // Not registered yet
+      return null;
+    }
+
+    throw Exception("Failed to fetch face setup: ${setupRes.statusCode} ${setupRes.body}");
+  }
+
+
+  Future<void> _fetchBiometricImage() async {
+    // Prevent duplicate fetches
+    if (_isFetchingImage || !mounted) return;
+
+    setState(() => _isFetchingImage = true);
+
+    IOClient? ioClient;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final token = prefs.getString("token");
+      final typedServerUrl = prefs.getString("typed_url");
+
+      // Basic validation
+      if (token == null ||
+          token.isEmpty ||
+          typedServerUrl == null ||
+          typedServerUrl.isEmpty) {
         if (mounted) showImageAlertDialog(context);
         return;
       }
 
+      // Normalize base URL (remove trailing slash)
+      final baseUrl = typedServerUrl.endsWith("/")
+          ? typedServerUrl.substring(0, typedServerUrl.length - 1)
+          : typedServerUrl;
+
+      // ✅ Auto-migration happens here:
+      // - If cached exists => use it
+      // - If not => GET /api/facedetection/setup/ and cache it
+      final faceDetectionImage = await _ensureFaceDetectionImageCached(
+        prefs: prefs,
+        token: token,
+        baseUrl: baseUrl,
+      );
+
+      // If still null => user has never set up face image
+      if (faceDetectionImage == null || faceDetectionImage.trim().isEmpty) {
+        if (mounted) showImageAlertDialog(context);
+        return;
+      }
+
+      // Build a safe absolute image URL
+      final img = faceDetectionImage.trim();
+      final String imageUrl;
+      if (img.startsWith("http://") || img.startsWith("https://")) {
+        imageUrl = img;
+      } else if (img.startsWith("/")) {
+        imageUrl = "$baseUrl$img"; // base + "/media/..."
+      } else {
+        imageUrl = "$baseUrl/$img";
+      }
+
       debugPrint("🔎 Fetching biometric image: $imageUrl");
 
-      // --- Correct usage of HttpClient + IOClient ---
+      // Optional: bypass self-signed certificate issues (common in internal servers)
       final httpClient = HttpClient();
       httpClient.badCertificateCallback =
           (X509Certificate cert, String host, int port) => true;
@@ -142,37 +218,32 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
       final ioClient = IOClient(httpClient);
 
-      final response = await ioClient.get(
+      final res = await ioClient.get(
         Uri.parse(imageUrl),
         headers: {
+          // Some servers don't require auth for media, but keeping this is usually safe
           "Authorization": "Bearer $token",
           "Accept": "image/*",
           "Accept-Encoding": "identity",
-          "User-Agent": "FlutterApp/1.0",
-          "Connection": "keep-alive",
         },
       );
 
-      print('cfcfccf');
+      if (!mounted) return;
 
-      debugPrint("📥 Status: ${response.statusCode}");
-      debugPrint("📥 Headers: ${response.headers}");
-
-      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
+      if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
         setState(() {
-          _employeeImageBase64 = base64Encode(response.bodyBytes);
+          _employeeImageBase64 = base64Encode(res.bodyBytes);
         });
-        debugPrint("✅ Image downloaded: ${response.bodyBytes.length} bytes");
+        debugPrint("✅ Biometric image loaded (${res.bodyBytes.length} bytes)");
       } else {
-        debugPrint("❌ Invalid response or empty image data");
-        if (mounted) showImageAlertDialog(context);
+        debugPrint("❌ Failed to fetch biometric image: ${res.statusCode}");
+        showImageAlertDialog(context);
       }
-
-      ioClient.close();
     } catch (e) {
       debugPrint("⚠️ Error fetching biometric image: $e");
       if (mounted) showImageAlertDialog(context);
     } finally {
+      ioClient?.close();
       if (mounted) setState(() => _isFetchingImage = false);
     }
   }
@@ -185,7 +256,15 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
         content: const Text("Setup a New FaceImage?"),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => CheckInCheckOutFormPage()),
+                );
+              }
+            },
             child: const Text("No"),
           ),
           TextButton(
@@ -326,9 +405,25 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
       final response = await http.Response.fromStream(streamed);
 
       if (response.statusCode == 200 && mounted) {
+        Map<String, dynamic> payload = {};
+        try {
+          final decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            payload = decoded;
+          }
+        } catch (_) {}
+
         Navigator.pop(context, {
           if (widget.attendanceState == 'NOT_CHECKED_IN') 'checkedIn': true,
           if (widget.attendanceState == 'CHECKED_IN') 'checkedOut': true,
+          // pass-through some useful flags
+          'missing_check_in': payload['missing_check_in'] ?? false,
+          'attendance_date': payload['attendance_date'],
+          'first_check_in': payload['first_check_in'] ?? payload['clock_in'] ?? payload['clock_in_time'],
+          'last_check_out': payload['last_check_out'],
+          'worked_hours': payload['worked_hours'] ?? payload['duration'],
+          'check_in_image': payload['check_in_image'] ?? payload['clock_in_image'],
+          'check_out_image': payload['check_out_image'] ?? payload['clock_out_image'],
         });
       } else if (mounted) {
         final errorMessage = getErrorMessage(response.body);
@@ -345,8 +440,17 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
   String getErrorMessage(String responseBody) {
     try {
-      final Map decoded = json.decode(responseBody);
-      return decoded['message'] ?? 'Unknown error occurred';
+      final decoded = json.decode(responseBody);
+      if (decoded is Map) {
+        final msg = decoded['error'] ?? decoded['message'] ?? decoded['detail'];
+        final lastAllowed = decoded['last_allowed'];
+        if (msg != null && lastAllowed != null) {
+          return '${msg.toString()} (Last allowed: ${lastAllowed.toString()})';
+        }
+        if (msg != null) return msg.toString();
+        if (decoded.isNotEmpty) return decoded.toString();
+      }
+      return responseBody;
     } catch (e) {
       return 'Error parsing server response';
     }
