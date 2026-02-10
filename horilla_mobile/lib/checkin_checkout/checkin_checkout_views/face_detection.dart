@@ -422,8 +422,6 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           'first_check_in': payload['first_check_in'] ?? payload['clock_in'] ?? payload['clock_in_time'],
           'last_check_out': payload['last_check_out'],
           'worked_hours': payload['worked_hours'] ?? payload['duration'],
-          'check_in_image': payload['check_in_image'] ?? payload['clock_in_image'],
-          'check_out_image': payload['check_out_image'] ?? payload['clock_out_image'],
         });
       } else if (mounted) {
         final errorMessage = getErrorMessage(response.body);
