@@ -133,52 +133,66 @@ class _CameraSetupPageState extends State<CameraSetupPage> {
     if (_capturedImage == null) return;
 
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
 
-    var request = http.MultipartRequest(
-      'POST',
-      Uri.parse('$typedServerUrl/api/facedetection/setup/'),
-    );
+    if (token == null || token.isEmpty || typedServerUrl == null || typedServerUrl.isEmpty) {
+      _showErrorDialog(context, "Missing token or server URL. Please login again.");
+      return;
+    }
+
+    // Normalize base URL to avoid double slashes
+    final base = typedServerUrl.endsWith("/")
+        ? typedServerUrl.substring(0, typedServerUrl.length - 1)
+        : typedServerUrl;
+
+    final url = "$base/api/facedetection/setup/";
+
+    final request = http.MultipartRequest("POST", Uri.parse(url));
 
     try {
-      // Prepare file for upload
-      var attachment = await http.MultipartFile.fromPath('image', _capturedImage!.path);
-      String fileName = _capturedImage!.name;
-
-      // Save image path in prefs
-      await prefs.setString("imagePath", fileName);
-
-      // Add file + headers
+      // Attach file (backend expects field name: "image")
+      final attachment = await http.MultipartFile.fromPath("image", _capturedImage!.path);
       request.files.add(attachment);
-      request.headers['Authorization'] = 'Bearer $token';
 
-      // Send request
-      var streamedResponse = await request.send();
+      // Headers
+      request.headers["Authorization"] = "Bearer $token";
+      request.headers["Accept"] = "application/json";
 
-      // Convert to normal Response to access body
-      var response = await http.Response.fromStream(streamedResponse);
+      // Send & read body
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
 
       print('===== Upload Debug Info =====');
-      print("Request: ${response.request}");
+      print("Request: POST $url");
       print("Status Code: ${response.statusCode}");
       print("Headers: ${response.headers}");
       print("Body: ${response.body}");
       print("=============================");
 
-      if (response.statusCode == 201) {
-        var face_detection_image = jsonDecode(response.body)['image'];
-        print('face_detection_image : $face_detection_image');
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('face_detection_image');
-        await prefs.setString("face_detection_image", face_detection_image);
+      // ✅ Treat any 2xx as success (server may return 200 or 201)
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        final decoded = jsonDecode(response.body);
+        final faceDetectionImage = (decoded["image"] ?? "").toString().trim();
+
+        if (faceDetectionImage.isEmpty) {
+          _showErrorDialog(context, "Upload succeeded but server did not return image path.");
+          return;
+        }
+
+        // ✅ Save the server-side image path (this is what _fetchBiometricImage must use)
+        await prefs.setString("face_detection_image", faceDetectionImage);
+
+        // ✅ Remove legacy key to prevent old validation logic from blocking
+        await prefs.remove("imagePath");
+
         _showCreateAnimation(context);
       } else {
-        _showErrorDialog(context, 'Error uploading image. Please try again.\n${response.body}');
+        _showErrorDialog(context, "Error uploading image. Please try again.\n${response.body}");
       }
     } catch (e) {
-      print('Exception: $e');
-      _showErrorDialog(context, 'Something went wrong. Please try again.');
+      print("Exception: $e");
+      _showErrorDialog(context, "Something went wrong. Please try again.\n$e");
     }
   }
 
