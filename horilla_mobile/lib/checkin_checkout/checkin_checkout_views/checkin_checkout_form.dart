@@ -870,22 +870,32 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       } catch (_) {}
     }
 
-    final dateLabel = DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
+    final dateLabel =
+    DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
     final checkInText = firstCheckIn ?? '-';
     final checkOutText = lastCheckOut ?? '-';
+    final note = _statusNote().trim();
 
     return Container(
       color: Colors.red,
-      height: MediaQuery.of(context).size.height * 0.25,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
+      padding: const EdgeInsets.all(16.0),
+      child: SafeArea(
+        bottom: false,
         child: Column(
+          mainAxisSize: MainAxisSize.min, // ✅ adaptive height (no empty space)
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+                const Text(
+                  'Attendance',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 20,
+                  ),
+                ),
                 Text(dateLabel, style: const TextStyle(color: Colors.white70)),
               ],
             ),
@@ -894,38 +904,72 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               children: [
                 _headerStat(
                   label: 'First Check-In',
-                  value: Text(checkInText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                  value: Text(
+                    checkInText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
                 ),
                 _headerStat(
                   label: 'Last Check-Out',
-                  value: Text(checkOutText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
+                  value: Text(
+                    checkOutText,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
+                  ),
                 ),
                 _headerStat(
                   label: 'Work Hours',
                   value: isCurrentlyCheckedIn
                       ? StreamBuilder<int>(
-                    stream: Stream.periodic(const Duration(seconds: 1), (_) => stopwatchManager.elapsed.inSeconds),
+                    stream: Stream.periodic(
+                      const Duration(seconds: 1),
+                          (_) => stopwatchManager.elapsed.inSeconds,
+                    ),
                     builder: (context, snapshot) {
                       final d = stopwatchManager.elapsed;
                       return Text(
                         _formatDuration(d),
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                        ),
                       );
                     },
                   )
                       : Text(
                     _toHHMMOrDash(workedHours),
-                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 18,
+                    ),
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            Text(
-              _statusNote(),
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-              textAlign: TextAlign.center,
-            ),
+
+            // ✅ Centered, only shown when non-empty
+            if (note.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: Text(
+                  note,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ],
         ),
       ),
