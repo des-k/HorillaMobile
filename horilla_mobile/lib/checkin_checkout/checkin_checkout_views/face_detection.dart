@@ -1,22 +1,20 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:horilla/checkin_checkout/checkin_checkout_views/setup_imageface.dart';
 import 'package:http/http.dart' as http;
-import 'package:http/io_client.dart';
 import 'package:path/path.dart' as p;
+import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
-
 import 'checkin_checkout_form.dart';
 import '../controllers/face_detection_controller.dart';
 
 class FaceScanner extends StatefulWidget {
   final Map userDetails;
-  final String? attendanceState; // 'NOT_CHECKED_IN' or 'CHECKED_IN'
+  final String? attendanceState;
   final Position? userLocation;
 
   const FaceScanner({
@@ -32,16 +30,11 @@ class FaceScanner extends StatefulWidget {
 
 class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStateMixin {
   late FaceScannerController _controller;
-
   bool _isCameraInitialized = false;
   bool _isComparing = false;
+  String? _employeeImageBase64;
   bool _isDetectionPaused = false;
   bool _isFetchingImage = false;
-
-  String? _employeeImageBase64;
-
-  // lifecycle / cancellation
-  bool _stopRequested = false;
 
   late AnimationController _animationController;
   late Animation _rotationAnimation;
@@ -69,55 +62,55 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     _animationController.repeat();
   }
 
-  void _safeSetState(VoidCallback fn) {
-    if (!mounted || _stopRequested) return;
-    setState(fn);
-  }
-
   Future<void> _initializeApp() async {
     try {
       await _fetchBiometricImage();
-      if (!mounted || _stopRequested) return;
-
-      if (_employeeImageBase64 != null) {
+      if (_employeeImageBase64 != null && mounted) {
         await _initializeCamera();
       }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Initialization failed: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Initialization failed: $e')),
+        );
+      }
     }
   }
 
   Future<void> _initializeCamera() async {
     try {
       await _controller.initializeCamera();
-      if (!mounted || _stopRequested) return;
+      if (!mounted) return;
 
-      _safeSetState(() => _isCameraInitialized = true);
+      setState(() => _isCameraInitialized = true);
       _startRealTimeFaceDetection();
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Camera initialization failed: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Camera initialization failed: $e')),
+        );
+      }
     }
   }
 
   /// Ensures `face_detection_image` exists in SharedPreferences.
   /// - If already cached -> return it
   /// - If not cached -> call GET /api/facedetection/setup/
+  ///   - 200 -> read `image`, store to prefs, return it
+  ///   - 404 -> user never setup -> return null (caller should show setup dialog)
+  ///   - others -> throw exception
   Future<String?> _ensureFaceDetectionImageCached({
     required SharedPreferences prefs,
     required String token,
     required String baseUrl,
   }) async {
+    // 1) Use cached value if exists
     final cached = prefs.getString("face_detection_image");
     if (cached != null && cached.trim().isNotEmpty) {
       return cached.trim();
     }
 
+    // 2) Not cached -> ask server
     final setupUri = Uri.parse("$baseUrl/api/facedetection/setup/");
     final setupRes = await http.get(
       setupUri,
@@ -134,6 +127,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
         if (image.isEmpty) return null;
 
+        // Normalize path: ensure it starts with "/" when it's not a full URL
         if (!image.startsWith("http://") &&
             !image.startsWith("https://") &&
             !image.startsWith("/")) {
@@ -141,24 +135,31 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
         }
 
         await prefs.setString("face_detection_image", image);
-        await prefs.remove("imagePath"); // remove legacy key
+
+        // Remove legacy key so old logic never blocks again
+        await prefs.remove("imagePath");
+
         return image;
       } catch (_) {
+        // Response is not JSON or unexpected
         return null;
       }
     }
 
     if (setupRes.statusCode == 404) {
+      // Not registered yet
       return null;
     }
 
     throw Exception("Failed to fetch face setup: ${setupRes.statusCode} ${setupRes.body}");
   }
 
-  Future<void> _fetchBiometricImage() async {
-    if (_isFetchingImage || !mounted || _stopRequested) return;
 
-    _safeSetState(() => _isFetchingImage = true);
+  Future<void> _fetchBiometricImage() async {
+    // Prevent duplicate fetches
+    if (_isFetchingImage || !mounted) return;
+
+    setState(() => _isFetchingImage = true);
 
     IOClient? ioClient;
     try {
@@ -167,40 +168,52 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
       final token = prefs.getString("token");
       final typedServerUrl = prefs.getString("typed_url");
 
-      if (token == null || token.isEmpty || typedServerUrl == null || typedServerUrl.isEmpty) {
+      // Basic validation
+      if (token == null ||
+          token.isEmpty ||
+          typedServerUrl == null ||
+          typedServerUrl.isEmpty) {
         if (mounted) showImageAlertDialog(context);
         return;
       }
 
+      // Normalize base URL (remove trailing slash)
       final baseUrl = typedServerUrl.endsWith("/")
           ? typedServerUrl.substring(0, typedServerUrl.length - 1)
           : typedServerUrl;
 
+      // ✅ Auto-migration happens here:
+      // - If cached exists => use it
+      // - If not => GET /api/facedetection/setup/ and cache it
       final faceDetectionImage = await _ensureFaceDetectionImageCached(
         prefs: prefs,
         token: token,
         baseUrl: baseUrl,
       );
 
+      // If still null => user has never set up face image
       if (faceDetectionImage == null || faceDetectionImage.trim().isEmpty) {
         if (mounted) showImageAlertDialog(context);
         return;
       }
 
+      // Build a safe absolute image URL
       final img = faceDetectionImage.trim();
       final String imageUrl;
       if (img.startsWith("http://") || img.startsWith("https://")) {
         imageUrl = img;
       } else if (img.startsWith("/")) {
-        imageUrl = "$baseUrl$img";
+        imageUrl = "$baseUrl$img"; // base + "/media/..."
       } else {
         imageUrl = "$baseUrl/$img";
       }
 
       debugPrint("🔎 Fetching biometric image: $imageUrl");
 
+      // Optional: bypass self-signed certificate issues (common in internal servers)
       final httpClient = HttpClient();
-      httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+      httpClient.badCertificateCallback =
+          (X509Certificate cert, String host, int port) => true;
       httpClient.autoUncompress = false;
 
       ioClient = IOClient(httpClient);
@@ -208,31 +221,30 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
       final res = await ioClient.get(
         Uri.parse(imageUrl),
         headers: {
+          // Some servers don't require auth for media, but keeping this is usually safe
           "Authorization": "Bearer $token",
           "Accept": "image/*",
           "Accept-Encoding": "identity",
         },
       );
 
-      if (!mounted || _stopRequested) return;
+      if (!mounted) return;
 
       if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
-        _safeSetState(() {
+        setState(() {
           _employeeImageBase64 = base64Encode(res.bodyBytes);
         });
         debugPrint("✅ Biometric image loaded (${res.bodyBytes.length} bytes)");
       } else {
         debugPrint("❌ Failed to fetch biometric image: ${res.statusCode}");
-        if (mounted) showImageAlertDialog(context);
+        showImageAlertDialog(context);
       }
     } catch (e) {
       debugPrint("⚠️ Error fetching biometric image: $e");
       if (mounted) showImageAlertDialog(context);
     } finally {
-      try {
-        ioClient?.close();
-      } catch (_) {}
-      _safeSetState(() => _isFetchingImage = false);
+      ioClient?.close();
+      if (mounted) setState(() => _isFetchingImage = false);
     }
   }
 
@@ -246,11 +258,12 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           TextButton(
             onPressed: () {
               Navigator.of(ctx).pop();
-              if (!mounted) return;
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => CheckInCheckOutFormPage()),
-              );
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => CheckInCheckOutFormPage()),
+                );
+              }
             },
             child: const Text("No"),
           ),
@@ -258,11 +271,12 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
             onPressed: () async {
               Navigator.of(ctx).pop();
               final cameras = await availableCameras();
-              if (!mounted) return;
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => CameraSetupPage(cameras: cameras)),
-              );
+              if (mounted) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => CameraSetupPage(cameras: cameras)),
+                );
+              }
             },
             child: const Text("Yes"),
           ),
@@ -272,18 +286,14 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
   }
 
   Future<void> _startRealTimeFaceDetection() async {
-    // Run a soft loop with cancellation checks
-    while (mounted && !_stopRequested && _isCameraInitialized && !_isDetectionPaused) {
+    while (_isCameraInitialized && !_isDetectionPaused && mounted) {
       try {
-        await Future.delayed(const Duration(milliseconds: 500));
-        if (!mounted || _stopRequested) break;
+        await Future.delayed(const Duration(milliseconds: 500)); // Increased delay
 
-        if (!_controller.cameraController.value.isInitialized) break;
+        if (!mounted || !_controller.cameraController.value.isInitialized) break;
 
-        _safeSetState(() => _isComparing = true);
-
+        setState(() => _isComparing = true);
         final image = await _controller.captureImage();
-        if (!mounted || _stopRequested) break;
 
         if (image == null || _employeeImageBase64 == null) {
           debugPrint('Image capture failed or no employee image');
@@ -292,17 +302,15 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
         debugPrint('Starting face comparison...');
         final isMatched = await _controller.compareFaces(File(image.path), _employeeImageBase64!);
-        if (!mounted || _stopRequested) break;
-
         debugPrint('Face comparison result: $isMatched');
 
         if (isMatched) {
-          await _handleComparisonResult(File(image.path));
+          await _handleComparisonResult(isMatched, File(image.path));
           break;
         } else {
-          _safeSetState(() => _isDetectionPaused = true);
+          setState(() => _isDetectionPaused = true);
           await _showIncorrectFaceAlert();
-          _safeSetState(() => _isDetectionPaused = false);
+          setState(() => _isDetectionPaused = false);
         }
       } catch (e) {
         debugPrint('Face detection error: $e');
@@ -312,7 +320,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           );
         }
       } finally {
-        _safeSetState(() => _isComparing = false);
+        if (mounted) setState(() => _isComparing = false);
       }
     }
   }
@@ -328,11 +336,12 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           TextButton(
             onPressed: () {
               Navigator.of(ctx).pop();
-              if (!mounted) return;
-              Navigator.pushReplacement(
-                context,
-                MaterialPageRoute(builder: (_) => CheckInCheckOutFormPage()),
-              );
+              if (mounted) {
+                Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(builder: (_) => CheckInCheckOutFormPage()),
+                );
+              }
             },
             child: const Text("OK"),
           ),
@@ -341,75 +350,113 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     );
   }
 
-  Map<String, dynamic>? _tryDecodeMap(String body) {
+  Future<void> _handleComparisonResult(bool isMatched, File capturedFile) async {
+    if (!isMatched || !mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    final geoFencing = prefs.getBool("geo_fencing") ?? false;
+
+    if (token == null || typedServerUrl == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Token / Server URL not found. Please login again.')),
+      );
+      return;
+    }
+
+    if (geoFencing && widget.userLocation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
+      );
+      return;
+    }
+
     try {
-      final decoded = jsonDecode(body);
-      if (decoded is Map<String, dynamic>) return decoded;
-      if (decoded is Map) return decoded.map((k, v) => MapEntry(k.toString(), v));
-      return null;
-    } catch (_) {
-      return null;
-    }
-  }
+      final endpoint = widget.attendanceState == 'NOT_CHECKED_IN'
+          ? 'api/attendance/clock-in/'
+          : 'api/attendance/clock-out/';
 
-  bool _shouldOfferProceedToCheckout({
-    required bool wasClockInAttempt,
-    required Map<String, dynamic>? data,
-    required String rawBody,
-  }) {
-    if (!wasClockInAttempt) return false;
+      final base = typedServerUrl.endsWith('/')
+          ? typedServerUrl.substring(0, typedServerUrl.length - 1)
+          : typedServerUrl;
 
-    // Strong signals from backend
-    final suggested = (data?['suggested_action'] ?? '').toString().toLowerCase();
-    final canClockOut = data?['can_clock_out'] == true;
+      final response = await _submitAttendance(
+        endpoint: endpoint,
+        capturedFile: capturedFile,
+        baseUrl: base,
+        token: token,
+        geoFencing: geoFencing,
+      );
 
-    if (suggested == 'clock_out' && canClockOut) return true;
+      if (response.statusCode == 200 && mounted) {
 
-    final code = (data?['code'] ?? '').toString().toUpperCase();
-    if (code == 'CHECKIN_CUTOFF_PASSED' && canClockOut) return true;
+        Map<String, dynamic> payload = {};
+        try {
+          final decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            payload = decoded;
+          }
+        } catch (_) {}
 
-    // Fallback heuristic for older backends
-    final msg = (data?['error'] ?? data?['message'] ?? data?['detail'] ?? rawBody).toString().toLowerCase();
-    if (msg.contains('cut') && msg.contains('off') && msg.contains('check in')) {
-      // if backend says you can still clock-out OR we assume yes
-      return canClockOut || true;
-    }
+        Navigator.pop(context, {
+          if (widget.attendanceState == 'NOT_CHECKED_IN') 'checkedIn': true,
+          if (widget.attendanceState == 'CHECKED_IN') 'checkedOut': true,
+          // pass-through some useful flags
+          'missing_check_in': payload['missing_check_in'] ?? false,
+          'attendance_date': payload['attendance_date'],
+          'first_check_in': payload['first_check_in'] ?? payload['clock_in'] ?? payload['clock_in_time'],
+          'last_check_out': payload['last_check_out'],
+          'worked_hours': payload['worked_hours'] ?? payload['duration'],
+        });
+      } else if (mounted) {
+        final errorMessage = getErrorMessage(response.body);
 
-    return false;
-  }
-
-  String _composeErrorMessage(String responseBody) {
-    final data = _tryDecodeMap(responseBody);
-    if (data != null) {
-      final msg = data['error'] ?? data['message'] ?? data['detail'];
-      final lastAllowed = data['last_allowed'] ?? data['check_in_last_allowed'] ?? data['check_out_last_allowed'];
-      if (msg != null && lastAllowed != null) {
-        return '${msg.toString()} (Last allowed: ${lastAllowed.toString()})';
+        // If check-in is blocked due to cut-off, allow user to proceed to check-out.
+        if (widget.attendanceState == 'NOT_CHECKED_IN' && _isClockInCutoffError(response.body)) {
+          await _showCutoffProceedDialog(
+            errorMessage: errorMessage,
+            capturedFile: capturedFile,
+            baseUrl: base,
+            token: token,
+            geoFencing: geoFencing,
+          );
+        } else {
+          showCheckInFailedDialog(context, errorMessage);
+        }
       }
-      if (msg != null) return msg.toString();
-      if (data.isNotEmpty) return data.toString();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Network error: $e')),
+        );
+      }
     }
-    // if not JSON
-    return responseBody.isNotEmpty ? responseBody : 'Error parsing server response';
   }
 
-  Future<void> _shutdownCameraSafely() async {
-    _stopRequested = true;
-    _isDetectionPaused = true;
-    _isCameraInitialized = false;
 
+  bool _isClockInCutoffError(String responseBody) {
     try {
-      if (_controller.cameraController.value.isInitialized) {
-        await _controller.cameraController.dispose();
+      final decoded = jsonDecode(responseBody);
+      if (decoded is Map) {
+        final msg = (decoded['error'] ?? decoded['message'] ?? decoded['detail'] ?? '')
+            .toString()
+            .toLowerCase();
+        // Be tolerant to variations:
+        // "check in cut off has passed", "check-in cutoff has passed", etc.
+        return msg.contains('cut') && msg.contains('off') && msg.contains('check') && msg.contains('in');
       }
     } catch (_) {}
+    final lower = responseBody.toLowerCase();
+    return lower.contains('cut') && lower.contains('off') && lower.contains('check') && lower.contains('in');
   }
 
-  Future<http.Response> _postAttendance({
+  Future<http.Response> _submitAttendance({
     required String endpoint,
-    required String token,
-    required String baseUrl,
     required File capturedFile,
+    required String baseUrl,
+    required String token,
     required bool geoFencing,
   }) async {
     final uri = Uri.parse('$baseUrl/$endpoint');
@@ -418,7 +465,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     request.headers['Authorization'] = 'Bearer $token';
     request.headers['Accept'] = 'application/json';
 
-    if (geoFencing) {
+    if (geoFencing && widget.userLocation != null) {
       request.fields['latitude'] = widget.userLocation!.latitude.toString();
       request.fields['longitude'] = widget.userLocation!.longitude.toString();
     }
@@ -435,173 +482,109 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     return http.Response.fromStream(streamed);
   }
 
-  Future<void> _handleComparisonResult(File capturedFile) async {
-    if (!mounted || _stopRequested) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString("token");
-    final typedServerUrl = prefs.getString("typed_url");
-    final geoFencing = prefs.getBool("geo_fencing") ?? false;
-
-    if (token == null || token.isEmpty || typedServerUrl == null || typedServerUrl.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Token / Server URL not found. Please login again.')),
-      );
-      return;
-    }
-
-    if (geoFencing && widget.userLocation == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
-      );
-      return;
-    }
-
-    final baseUrl = typedServerUrl.endsWith('/')
-        ? typedServerUrl.substring(0, typedServerUrl.length - 1)
-        : typedServerUrl;
-
-    final bool isClockInAttempt = widget.attendanceState == 'NOT_CHECKED_IN';
-
-    // Decide default endpoint
-    final defaultEndpoint = isClockInAttempt
-        ? 'api/attendance/clock-in/'
-        : 'api/attendance/clock-out/';
-
-    try {
-      // 1) Try default action
-      final res = await _postAttendance(
-        endpoint: defaultEndpoint,
-        token: token,
-        baseUrl: baseUrl,
-        capturedFile: capturedFile,
-        geoFencing: geoFencing,
-      );
-
-      if (!mounted || _stopRequested) return;
-
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        Map<String, dynamic> payload = _tryDecodeMap(res.body) ?? {};
-
-        // Close camera cleanly BEFORE leaving this screen (reduces "dead thread" warning)
-        await _shutdownCameraSafely();
-        if (!mounted) return;
-
-        Navigator.pop(context, {
-          if (isClockInAttempt) 'checkedIn': true,
-          if (!isClockInAttempt) 'checkedOut': true,
-          'missing_check_in': payload['missing_check_in'] ?? false,
-          'attendance_date': payload['attendance_date'],
-          'first_check_in': payload['first_check_in'] ?? payload['clock_in'] ?? payload['clock_in_time'],
-          'last_check_out': payload['last_check_out'],
-          'worked_hours': payload['worked_hours'] ?? payload['duration'],
-        });
-        return;
-      }
-
-      // 2) Not success: decide whether to offer "Proceed to Check-Out"
-      final data = _tryDecodeMap(res.body);
-      final rawBody = res.body;
-
-      final offerProceed = _shouldOfferProceedToCheckout(
-        wasClockInAttempt: isClockInAttempt,
-        data: data,
-        rawBody: rawBody,
-      );
-
-      final errorMessage = _composeErrorMessage(res.body);
-
-      if (!mounted) return;
-
-      if (offerProceed) {
-        await _showProceedToCheckoutDialog(
-          errorMessage: errorMessage,
-          onProceed: () async {
-            // Try clock-out using same captured image (missing check-in flow)
-            final outRes = await _postAttendance(
-              endpoint: 'api/attendance/clock-out/',
-              token: token,
-              baseUrl: baseUrl,
-              capturedFile: capturedFile,
-              geoFencing: geoFencing,
-            );
-
-            if (!mounted || _stopRequested) return;
-
-            if (outRes.statusCode >= 200 && outRes.statusCode < 300) {
-              final outPayload = _tryDecodeMap(outRes.body) ?? {};
-
-              await _shutdownCameraSafely();
-              if (!mounted) return;
-
-              Navigator.pop(context, {
-                'checkedOut': true,
-                'missing_check_in': true, // force missing check-in display
-                'attendance_date': outPayload['attendance_date'],
-                'first_check_in': outPayload['first_check_in'] ?? '-',
-                'last_check_out': outPayload['last_check_out'],
-                'worked_hours': outPayload['worked_hours'] ?? outPayload['duration'],
-              });
-              return;
-            }
-
-            // Clock-out also failed
-            final outErr = _composeErrorMessage(outRes.body);
-            if (!mounted) return;
-            _showSimpleFailedDialog(title: 'Check-out Failed', message: outErr);
-          },
-        );
-      } else {
-        _showSimpleFailedDialog(title: 'Check-in Failed', message: errorMessage);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Network error: $e')),
-      );
-    }
-  }
-
-  Future<void> _showProceedToCheckoutDialog({
+  Future<void> _showCutoffProceedDialog({
     required String errorMessage,
-    required Future<void> Function() onProceed,
+    required File capturedFile,
+    required String baseUrl,
+    required String token,
+    required bool geoFencing,
   }) async {
-    return showDialog(
+    if (!mounted) return;
+
+    // Prevent the loop from doing anything while dialog is open
+    setState(() => _isDetectionPaused = true);
+
+    await showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Check-in Failed'),
+        title: const Text('Check-in Cut-off Passed'),
         content: Text(
-          '$errorMessage\n\nYou can still check-out (Missing Check-In). Proceed?',
+          '$errorMessage\n\nYou can still record a check-out now (it will be marked as Missing Check-In).',
         ),
         actions: [
           TextButton(
             onPressed: () {
-              Navigator.pop(ctx);
-              // close FaceScanner screen
-              if (mounted) Navigator.pop(context);
+              Navigator.of(ctx).pop(); // close dialog
+              if (mounted) Navigator.of(context).pop(); // close scanner
             },
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () async {
-              Navigator.pop(ctx);
-              await onProceed();
+              Navigator.of(ctx).pop(); // close dialog first
+              try {
+                final outRes = await _submitAttendance(
+                  endpoint: 'api/attendance/clock-out/',
+                  capturedFile: capturedFile,
+                  baseUrl: baseUrl,
+                  token: token,
+                  geoFencing: geoFencing,
+                );
+
+                if (!mounted) return;
+
+                if (outRes.statusCode == 200) {
+                  Map<String, dynamic> payload = {};
+                  try {
+                    final decoded = jsonDecode(outRes.body);
+                    if (decoded is Map<String, dynamic>) payload = decoded;
+                  } catch (_) {}
+
+                  Navigator.pop(context, {
+                    'checkedOut': true,
+                    'missing_check_in': payload['missing_check_in'] ?? true,
+                    'attendance_date': payload['attendance_date'],
+                    'first_check_in': payload['first_check_in'] ??
+                        payload['clock_in'] ??
+                        payload['clock_in_time'],
+                    'last_check_out': payload['last_check_out'],
+                    'worked_hours': payload['worked_hours'] ?? payload['duration'],
+                  });
+                } else {
+                  final msg = getErrorMessage(outRes.body);
+                  showCheckInFailedDialog(context, msg);
+                }
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Network error: $e')),
+                );
+              }
             },
             child: const Text('Proceed to Check-Out'),
           ),
         ],
       ),
     );
+
+    if (mounted) setState(() => _isDetectionPaused = false);
   }
 
-  void _showSimpleFailedDialog({required String title, required String message}) {
+  String getErrorMessage(String responseBody) {
+    try {
+      final decoded = json.decode(responseBody);
+      if (decoded is Map) {
+        final msg = decoded['error'] ?? decoded['message'] ?? decoded['detail'];
+        final lastAllowed = decoded['last_allowed'];
+        if (msg != null && lastAllowed != null) {
+          return '${msg.toString()} (Last allowed: ${lastAllowed.toString()})';
+        }
+        if (msg != null) return msg.toString();
+        if (decoded.isNotEmpty) return decoded.toString();
+      }
+      return responseBody;
+    } catch (e) {
+      return 'Error parsing server response';
+    }
+  }
+
+  void showCheckInFailedDialog(BuildContext context, String errorMessage) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
+        title: const Text('Check-in Failed'),
+        content: Text(errorMessage),
         actions: [
           TextButton(
             onPressed: () {
@@ -617,20 +600,9 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
   @override
   void dispose() {
-    _stopRequested = true;
     _isDetectionPaused = true;
-
-    try {
-      _animationController.stop();
-      _animationController.dispose();
-    } catch (_) {}
-
-    try {
-      if (_controller.cameraController.value.isInitialized) {
-        _controller.cameraController.dispose();
-      }
-    } catch (_) {}
-
+    _animationController.dispose();
+    _controller.dispose();
     super.dispose();
   }
 
@@ -710,7 +682,8 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
             SizedBox(height: screenHeight * 0.1),
             _buildImageContainer(screenHeight, screenWidth),
             SizedBox(height: screenHeight * 0.05),
-            if (_isFetchingImage) const CircularProgressIndicator(),
+            if (_isFetchingImage)
+              const CircularProgressIndicator(),
           ],
         ),
       ),
