@@ -47,10 +47,23 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   bool isCurrentlyCheckedIn = false; // checked-in but not checked-out
   bool missingCheckIn = false; // checked-out exists but check-in missing
 
+  // Server-driven action flags (from /api/attendance/checking-in)
+  bool serverCanClockIn = false;
+  bool serverCanClockOut = false;
+  bool checkInCutoffPassed = false;
+
   String attendanceDate = ''; // yyyy-mm-dd (resolved)
   String? firstCheckIn;
   String? lastCheckOut;
   String workedHours = '00:00:00';
+
+  // Optional status helpers from backend (safe defaults if missing)
+  String? minimumWorkingHour;
+  bool workHoursBelowMinimum = false;
+  String? workHoursShortfall;
+  bool checkedOutEarly = false;
+  String? checkInImage;
+  String? checkOutImage;
 
   // Location
   Position? userLocation;
@@ -61,9 +74,26 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   // Bottom nav
   final _controller = NotchBottomBarController(index: 1);
 
-  String get swipeDirection => canCheckIn ? 'Swipe to Check-In' : 'Swipe to Check-out';
-  bool get canCheckIn => !hasAttendance;
-  bool get canCheckOut => hasAttendance; // allow updating last checkout multiple times
+  String get swipeDirection {
+    if (canCheckIn) return 'Swipe ➜ CHECK IN';
+    if (canCheckOut) {
+      return (lastCheckOut != null)
+          ? 'Swipe ⇦ UPDATE CHECK OUT'
+          : 'Swipe ⇦ CHECK OUT';
+    }
+    return 'Attendance action not available';
+  }
+
+  /// Can the user clock-in now?
+  /// Prefer server flags, fallback to legacy behavior.
+  bool get canCheckIn =>
+      serverCanClockIn || (!hasAttendance && !checkInCutoffPassed);
+
+  /// Can the user clock-out now?
+  /// In single-session mode: allow multiple check-outs (update last check-out).
+  /// Also allow check-out when check-in cut-off has passed (missing check-in scenario).
+  bool get canCheckOut =>
+      serverCanClockOut || (hasAttendance || missingCheckIn || checkInCutoffPassed);
 
   @override
   void initState() {
@@ -310,24 +340,114 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final bool statusFlag = (data['status'] ?? false) == true;
     final bool hasAttendanceFlag = (data['has_attendance'] ?? false) == true;
 
-    final String? first = (data['first_check_in'] ?? data['clock_in'] ?? data['clock_in_time'])?.toString();
+    // Optional newer API fields (server-driven)
+    final bool cutoffPassed = (data['check_in_cutoff_passed'] ??
+        data['check_in_cutoff_has_passed'] ??
+        false) ==
+        true;
+
+    final String suggestedAction =
+    (data['suggested_action'] ?? data['action'] ?? '').toString().toLowerCase();
+
+    final bool canInFromApi =
+        (data['can_clock_in'] ?? data['can_check_in'] ?? false) == true;
+    final bool canOutFromApi =
+        (data['can_clock_out'] ?? data['can_check_out'] ?? false) == true;
+
+    final String? first =
+    (data['first_check_in'] ?? data['clock_in'] ?? data['clock_in_time'])
+        ?.toString();
     final String? last = (data['last_check_out'])?.toString();
 
-    final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
+    final String hours =
+    (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
+
+// Optional hints (may not exist depending on backend)
+    final String? minWorkRaw = (data['minimum_working_hour'] ??
+        data['minimum_work_hours'] ??
+        data['min_working_hour'])
+        ?.toString();
+
+    final String? shortfallRaw = (data['work_hours_shortfall'] ??
+        data['work_hours_remaining'] ??
+        data['shortfall'])
+        ?.toString();
+
+    final bool belowMin = (data['work_hours_below_minimum'] ??
+        data['below_minimum_work_hours'] ??
+        false) ==
+        true;
+
+    final bool earlyOut = (data['checked_out_early'] ??
+        data['early_check_out'] ??
+        false) ==
+        true;
+
+    final String? inImgRaw = (data['check_in_image'] ??
+        data['clock_in_image'] ??
+        data['attendance_clock_in_image'])
+        ?.toString();
+    final String? outImgRaw = (data['check_out_image'] ??
+        data['clock_out_image'] ??
+        data['attendance_clock_out_image'])
+        ?.toString();
+
     final String attDate = (data['attendance_date'] ?? '').toString();
 
-    final bool missingIn = (data['missing_check_in'] ?? false) == true;
-    final bool hasIn = (data['has_checked_in'] ?? ((first ?? '').trim().isNotEmpty)) == true;
+    final bool hasIn =
+        (data['has_checked_in'] ?? ((first ?? '').trim().isNotEmpty)) == true;
+
+    // Missing check-in can be explicitly returned by API, OR inferred when cut-off
+    // has passed and there's no check-in yet.
+    final bool missingIn = (data['missing_check_in'] ?? false) == true ||
+        (cutoffPassed && !hasIn);
+
+    // Decide which actions should be enabled:
+    // - Prefer explicit API flags when present
+    // - If suggested_action says clock_out, allow clock-out even when no attendance exists yet.
+    final bool canClockIn =
+    (data.containsKey('can_clock_in') || data.containsKey('can_check_in'))
+        ? canInFromApi
+        : (!hasAttendanceFlag && !cutoffPassed);
+
+    bool canClockOut =
+    (data.containsKey('can_clock_out') || data.containsKey('can_check_out'))
+        ? canOutFromApi
+        : (hasAttendanceFlag || cutoffPassed || missingIn);
+
+    if (suggestedAction == 'clock_out') {
+      canClockOut = true;
+    }
 
     setState(() {
       isCurrentlyCheckedIn = statusFlag;
-      hasAttendance = hasAttendanceFlag || ((first ?? '').trim().isNotEmpty) || ((last ?? '').trim().isNotEmpty);
+
+      checkInCutoffPassed = cutoffPassed;
+      serverCanClockIn = canClockIn;
+      serverCanClockOut = canClockOut;
+
+      hasAttendance = hasAttendanceFlag ||
+          ((first ?? '').trim().isNotEmpty) ||
+          ((last ?? '').trim().isNotEmpty);
+
       hasCheckedIn = hasIn;
       missingCheckIn = missingIn;
+
       attendanceDate = attDate;
       firstCheckIn = (first != null && first.trim().isNotEmpty) ? first : null;
-      lastCheckOut = (last != null && last.trim().isNotEmpty && last.trim().toLowerCase() != 'null') ? last : null;
+      lastCheckOut = (last != null &&
+          last.trim().isNotEmpty &&
+          last.trim().toLowerCase() != 'null')
+          ? last
+          : null;
+
       workedHours = hours;
+      minimumWorkingHour = _toHHMM(minWorkRaw);
+      workHoursBelowMinimum = belowMin;
+      checkedOutEarly = earlyOut;
+      workHoursShortfall = _toHHMM(shortfallRaw);
+      checkInImage = _cleanNullablePath(inImgRaw);
+      checkOutImage = _cleanNullablePath(outImgRaw);
     });
 
     // Sync stopwatch
@@ -359,8 +479,158 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   }
 
   String _formatDuration(Duration duration) {
-    String twoDigits(int n) => n.toString().padLeft(2, '0');
-    return '${twoDigits(duration.inHours)}:${twoDigits(duration.inMinutes.remainder(60))}:${twoDigits(duration.inSeconds.remainder(60))}';
+    // Display only HH:MM (no seconds)
+    final hours = duration.inHours.toString().padLeft(2, '0');
+    final minutes = (duration.inMinutes.remainder(60)).toString().padLeft(2, '0');
+    return '$hours:$minutes';
+  }
+
+  bool _hasValue(String? v) {
+    if (v == null) return false;
+    final s = v.toString().trim();
+    if (s.isEmpty) return false;
+    if (s.toLowerCase() == 'null') return false;
+    return true;
+  }
+
+  String? _toHHMM(String? hhmmss) {
+    if (!_hasValue(hhmmss)) return null;
+    final s = hhmmss!.trim();
+    final parts = s.split(':');
+    if (parts.length >= 2) {
+      final h = parts[0].padLeft(2, '0');
+      final m = parts[1].padLeft(2, '0');
+      return '$h:$m';
+    }
+    return s;
+  }
+
+  String _toHHMMOrDash(String? hhmmss) {
+    final v = _toHHMM(hhmmss);
+    return _hasValue(v) ? v! : '--:--';
+  }
+
+  String _statusNote() {
+    final hasIn = _hasValue(firstCheckIn);
+    final hasOut = _hasValue(lastCheckOut);
+
+    // No record yet
+    if (!hasAttendance && !missingCheckIn) {
+      if (checkInCutoffPassed && serverCanClockOut) {
+        return 'Check-in cut-off passed. You can check out.';
+      }
+      return 'No record yet. Swipe to check in.';
+    }
+
+    // Forgot check-in (cutoff passed), but can still check out
+    if (missingCheckIn) {
+      if (hasOut) {
+        return 'Checked out. Submit a request to add your check-in.';
+      }
+      return 'Missing check-in. You can check out now.';
+    }
+
+    // Normal flows
+    if (hasIn && !hasOut) {
+      return "Checked in. Don't forget to check out.";
+    }
+
+    if (hasIn && hasOut) {
+      if (workHoursBelowMinimum) {
+        if (_hasValue(workHoursShortfall)) {
+          return 'Work hours short by ${workHoursShortfall!}.';
+        }
+        if (_hasValue(minimumWorkingHour)) {
+          return 'Work hours below minimum (${minimumWorkingHour!}).';
+        }
+        return 'Work hours below minimum.';
+      }
+
+      if (checkedOutEarly) {
+        return 'Checked out early. Submit a request if needed.';
+      }
+
+      return 'Attendance saved for today.';
+    }
+
+    // Edge: out exists without in (server didn’t flag missing check-in)
+    if (!hasIn && hasOut) {
+      return 'Checked out. Submit a request to add your check-in.';
+    }
+
+    return 'Attendance updated.';
+  }
+
+
+  String? _cleanNullablePath(dynamic raw) {
+    if (raw == null) return null;
+    final s = raw.toString().trim();
+    if (s.isEmpty) return null;
+    final lower = s.toLowerCase();
+    if (lower == 'null' || lower == 'none') return null;
+
+    if (s.startsWith('http://') || s.startsWith('https://')) return s;
+
+    // Normalize relative path so it can be joined with base URL
+    if (!s.startsWith('/')) return '/$s';
+    return s;
+  }
+
+  String? _buildMediaUrl(String? path) {
+    if (path == null) return null;
+    final p = path.trim();
+    if (p.isEmpty) return null;
+
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+
+    final b = baseUrl.trim();
+    if (b.isEmpty) return p;
+
+    return p.startsWith('/') ? '$b$p' : '$b/$p';
+  }
+
+  Widget _buildPhotoTile({required String label, required String? url}) {
+    final fullUrl = _buildMediaUrl(url);
+    final headers = getToken.isNotEmpty
+        ? <String, String>{'Authorization': 'Bearer $getToken'}
+        : <String, String>{};
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 6),
+        Container(
+          height: 180,
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey),
+            borderRadius: BorderRadius.circular(12),
+            color: Colors.grey.shade100,
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: fullUrl == null
+                ? const Center(child: Text('-'))
+                : Image.network(
+              fullUrl,
+              headers: headers,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) {
+                return const Center(child: Text('-'));
+              },
+              loadingBuilder: (context, child, progress) {
+                if (progress == null) return child;
+                return const Center(child: CircularProgressIndicator());
+              },
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   String _extractErrorMessage(String responseBody) {
@@ -465,8 +735,24 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         ),
       );
 
-      if (result != null && result['checkedIn'] == true) {
-        await refreshAttendanceStatus();
+      if (result != null) {
+        final bool didIn = result['checkedIn'] == true;
+        final bool didOut = result['checkedOut'] == true;
+
+        if (didIn || didOut) {
+          await refreshAttendanceStatus();
+        }
+
+        if (didOut && mounted) {
+          // This happens when check-in cut-off has passed and user proceeds to check-out.
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Check-out recorded but check-in is missing. Please submit an attendance request.',
+              ),
+            ),
+          );
+        }
       }
       return;
     }
@@ -585,8 +871,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     }
 
     final dateLabel = DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
-    final checkInText = firstCheckIn ?? '--:--';
-    final checkOutText = lastCheckOut ?? '--:--';
+    final checkInText = firstCheckIn ?? '-';
+    final checkOutText = lastCheckOut ?? '-';
 
     return Container(
       color: Colors.red,
@@ -618,33 +904,28 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                   label: 'Work Hours',
                   value: isCurrentlyCheckedIn
                       ? StreamBuilder<int>(
-                          stream: Stream.periodic(const Duration(seconds: 1), (_) => stopwatchManager.elapsed.inSeconds),
-                          builder: (context, snapshot) {
-                            final d = stopwatchManager.elapsed;
-                            return Text(
-                              _formatDuration(d),
-                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
-                            );
-                          },
-                        )
+                    stream: Stream.periodic(const Duration(seconds: 1), (_) => stopwatchManager.elapsed.inSeconds),
+                    builder: (context, snapshot) {
+                      final d = stopwatchManager.elapsed;
+                      return Text(
+                        _formatDuration(d),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                      );
+                    },
+                  )
                       : Text(
-                          workedHours,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
-                        ),
+                    _toHHMMOrDash(workedHours),
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
                 ),
               ],
             ),
             const SizedBox(height: 10),
-            if (missingCheckIn)
-              const Text(
-                'Missing check-in detected. Please submit an attendance request to fix it.',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
-            if (!missingCheckIn && !hasAttendance)
-              const Text(
-                'No attendance record yet for today.',
-                style: TextStyle(color: Colors.white70, fontSize: 12),
-              ),
+            Text(
+              _statusNote(),
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
@@ -719,17 +1000,21 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     ),
                     SizedBox(width: MediaQuery.of(context).size.width * 0.01),
                     Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '$requestsEmpMyFirstName $requestsEmpMyLastName',
-                            style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          Text(requestsEmpMyBadgeId, style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.normal)),
-                        ],
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$requestsEmpMyFirstName $requestsEmpMyLastName',
+                              style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            Text(requestsEmpMyBadgeId, style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.normal)),
+                          ],
+                        ),
                       ),
                     ),
                   ],
@@ -740,18 +1025,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('Department'),
-                      Flexible(child: Text(requestsEmpMyDepartment, overflow: TextOverflow.ellipsis)),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
                       const Text('First Check-In'),
-                      Text(firstCheckIn ?? '--:--'),
+                      Text(firstCheckIn ?? '-'),
                     ],
                   ),
                 ),
@@ -761,7 +1036,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Last Check-Out'),
-                      Text(lastCheckOut ?? '--:--'),
+                      Text(lastCheckOut ?? '-'),
                     ],
                   ),
                 ),
@@ -774,6 +1049,24 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                       Flexible(child: Text(requestsEmpMyShiftName, overflow: TextOverflow.ellipsis)),
                     ],
                   ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildPhotoTile(
+                        label: 'Check-In Photo',
+                        url: checkInImage,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildPhotoTile(
+                        label: 'Check-Out Photo',
+                        url: checkOutImage,
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -809,7 +1102,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
           height: MediaQuery.of(context).size.height * 0.07,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(8.0),
-            color: canCheckIn ? Colors.green : Colors.red,
+            color: canCheckIn ? Colors.green : (canCheckOut ? Colors.red : Colors.grey),
           ),
           alignment: Alignment.center,
           child: Row(
