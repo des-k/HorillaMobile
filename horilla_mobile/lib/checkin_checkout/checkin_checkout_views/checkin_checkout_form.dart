@@ -964,8 +964,10 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  mainAxisAlignment: MainAxisAlignment.start,
                   children: [
+                    // Avatar
                     Container(
                       width: 40.0,
                       height: 40.0,
@@ -980,40 +982,40 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                               child: ClipOval(
                                 child: Image.network(
                                   baseUrl + requestsEmpProfile,
-                                  headers: {
-                                    'Authorization': 'Bearer $getToken',
-                                  },
+                                  headers: {'Authorization': 'Bearer $getToken'},
                                   fit: BoxFit.cover,
-                                  errorBuilder: (context, exception, stackTrace) => const Icon(Icons.person, color: Colors.grey),
+                                  errorBuilder: (context, exception, stackTrace) =>
+                                  const Icon(Icons.person, color: Colors.grey),
                                 ),
                               ),
                             ),
                           if (requestsEmpProfile.isEmpty)
                             Positioned.fill(
                               child: Container(
-                                decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.grey[400]),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.grey[400],
+                                ),
                                 child: const Icon(Icons.person),
                               ),
                             ),
                         ],
                       ),
                     ),
-                    SizedBox(width: MediaQuery.of(context).size.width * 0.01),
+                    const SizedBox(width: 10),
+
+                    // ✅ Name always vertically centered relative to avatar
                     Expanded(
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '$requestsEmpMyFirstName $requestsEmpMyLastName',
-                              style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            Text(requestsEmpMyBadgeId, style: const TextStyle(fontSize: 12.0, fontWeight: FontWeight.normal)),
-                          ],
+                      child: SizedBox(
+                        height: 40.0, // sama dengan tinggi avatar
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            '$requestsEmpMyFirstName $requestsEmpMyLastName',
+                            style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+                            maxLines: 2, // boleh 2 baris
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ),
                     ),
@@ -1046,7 +1048,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       const Text('Shift'),
-                      Flexible(child: Text(requestsEmpMyShiftName, overflow: TextOverflow.ellipsis)),
+                      Flexible(
+                        child: Text(
+                          requestsEmpMyShiftName,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
                     ],
                   ),
                 ),
