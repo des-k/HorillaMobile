@@ -847,11 +847,16 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 4.0),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center, // center horizontally
           children: [
-            Text(label, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            Text(
+              label,
+              textAlign: TextAlign.center, // center text (for wrapping)
+              style: const TextStyle(color: Colors.white70, fontSize: 12),
+            ),
             const SizedBox(height: 4),
-            value,
+            Center(child: value), // center the value widget
           ],
         ),
       ),
