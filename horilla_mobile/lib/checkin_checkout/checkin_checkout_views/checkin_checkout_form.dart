@@ -78,6 +78,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String? checkInImage;
   String? checkOutImage;
 
+  // Late check-in info (from backend)
+  bool lateCheckIn = false;
+  String? lateBy;      // "HH:MM"
+  String? shiftStart;  // "HH:MM" (from API: shift_start)
+
+
   // Location
   Position? userLocation;
 
@@ -414,6 +420,15 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     final bool earlyOut = (data['checked_out_early'] ?? data['early_check_out'] ?? false) == true;
 
+
+    final bool late = (data['late_check_in'] ?? false) == true;
+    final String? lateByRaw =
+    (data['late_by'] ?? data['late_minutes'] ?? data['late'])?.toString();
+
+    final String? shiftStartRaw =
+    (data['shift_start'] ?? data['shift_start_time'] ?? data['shift_start_hhmm'])
+        ?.toString();
+
     final String? inImgRaw =
     (data['check_in_image'] ?? data['clock_in_image'] ?? data['attendance_clock_in_image'])
         ?.toString();
@@ -487,6 +502,10 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       minimumWorkingHour = _toHHMM(minWorkRaw);
       workHoursBelowMinimum = belowMin;
       checkedOutEarly = earlyOut;
+
+      lateCheckIn = late;
+      lateBy = _toHHMM(lateByRaw);
+      shiftStart = _toHHMM(shiftStartRaw);
       workHoursShortfall = _toHHMM(shortfallRaw);
       checkInImage = _cleanNullablePath(inImgRaw);
       checkOutImage = _cleanNullablePath(outImgRaw);
@@ -539,6 +558,45 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final m = (totalMinutes % 60).toString().padLeft(2, '0');
     return '$h:$m';
   }
+
+
+  int? _hhmmToMinutes(String? hhmm) {
+    if (!_hasValue(hhmm)) return null;
+    final s = hhmm!.trim();
+    final parts = s.split(':');
+    if (parts.length < 2) return null;
+    final h = int.tryParse(parts[0]) ?? 0;
+    final m = int.tryParse(parts[1]) ?? 0;
+    if (h < 0 || m < 0) return null;
+    return (h * 60) + m;
+  }
+
+  String _minutesToHHMM(int totalMinutes) {
+    final mins = totalMinutes % (24 * 60);
+    final h = (mins ~/ 60).toString().padLeft(2, '0');
+    final m = (mins % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  // Planned check-out based on SHIFT START (not actual check-in time):
+  // plannedOut = shiftStart + minimumWorkingHour
+  // If it crosses midnight: "HH:MM tomorrow"
+  String? _plannedCheckoutFromShiftStart() {
+    if (!_hasValue(shiftStart) || !_hasValue(minimumWorkingHour)) return null;
+
+    final startMin = _hhmmToMinutes(shiftStart);
+    final reqMin = _hhmmToMinutes(minimumWorkingHour);
+
+    if (startMin == null || reqMin == null) return null;
+
+    final total = startMin + reqMin;
+    final dayOffset = total ~/ (24 * 60);
+    final hhmm = _minutesToHHMM(total);
+
+    if (dayOffset > 0) return '$hhmm tomorrow';
+    return hhmm;
+  }
+
 
   // Parses API time string to DateTime.
   // Supports ISO datetime and HH:mm / HH:mm:ss.
@@ -673,49 +731,46 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     // No record yet
     if (!hasAttendance && !missingCheckIn) {
-      if (checkInCutoffPassed && serverCanClockOut) {
-        return 'Check-in cut-off passed. You can check out.';
-      }
-      return 'No record yet. Swipe to check in.';
+      if (checkInCutoffPassed && serverCanClockOut) return 'Cut-off • Can out';
+      return 'No record • Swipe in';
     }
 
-    // Forgot check-in (cutoff passed), but can still check out
+    // Missing check-in
     if (missingCheckIn) {
-      if (hasOut) {
-        return 'Checked out. Submit a request to add your check-in.';
-      }
-      return 'Missing check-in. You can check out now.';
+      if (hasOut) return 'Missing in • Out saved';
+      return 'Missing in • Can out';
     }
 
-    // Normal flows
+    // Checked-in, not checked-out
     if (hasIn && !hasOut) {
-      return "Checked in. Don't forget to check out.";
+      if (lateCheckIn && _hasValue(lateBy)) {
+        final planned = _plannedCheckoutFromShiftStart();
+        if (planned != null) return 'Late ${lateBy!} • Out $planned';
+        return 'Late ${lateBy!}';
+      }
+      return "Checked in • Don't forget out";
     }
 
+    // Checked-in and checked-out
     if (hasIn && hasOut) {
       if (workHoursBelowMinimum) {
-        if (_hasValue(workHoursShortfall)) {
-          return 'Work hours short by ${workHoursShortfall!}.';
+        if (lateCheckIn && _hasValue(lateBy)) {
+          if (_hasValue(workHoursShortfall)) return 'Late ${lateBy!} • Short ${workHoursShortfall!}';
+          return 'Late ${lateBy!} • Below min';
         }
-        if (_hasValue(minimumWorkingHour)) {
-          return 'Work hours below minimum (${minimumWorkingHour!}).';
-        }
-        return 'Work hours below minimum.';
+        if (_hasValue(workHoursShortfall)) return 'Short ${workHoursShortfall!}';
+        if (_hasValue(minimumWorkingHour)) return 'Below min ${minimumWorkingHour!}';
+        return 'Below min';
       }
 
-      if (checkedOutEarly) {
-        return 'Checked out early. Submit a request if needed.';
-      }
-
-      return 'Attendance saved for today.';
+      if (checkedOutEarly) return 'Early out';
+      return 'Saved';
     }
 
-    // Edge: out exists without in (server didn’t flag missing check-in)
-    if (!hasIn && hasOut) {
-      return 'Checked out. Submit a request to add your check-in.';
-    }
+    // Edge
+    if (!hasIn && hasOut) return 'Out saved • Missing in';
 
-    return 'Attendance updated.';
+    return '';
   }
 
   String? _cleanNullablePath(dynamic raw) {
@@ -1083,7 +1138,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                   builder: (context, _) {
                     final serverNow = DateTime.now().add(_serverOffset);
                     return Text(
-                      'Waktu Server • ${DateFormat('HH:mm').format(serverNow)}',
+                      'Server Time • ${DateFormat('HH:mm').format(serverNow)}',
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: Colors.white70, fontSize: 12),
                     );
