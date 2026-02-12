@@ -11,7 +11,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shimmer/shimmer.dart';
 
 import 'face_detection.dart';
-import 'stopwatch.dart';
 
 class CheckInCheckOutFormPage extends StatefulWidget {
   const CheckInCheckOutFormPage({super.key});
@@ -68,8 +67,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   // Location
   Position? userLocation;
 
-  // Timer
-  final StopwatchManager stopwatchManager = StopwatchManager();
+  // Server time (display only)
+  // The app doesn't poll the server every second; instead it keeps an offset computed from
+  // `server_now` + RTT/2 so the displayed server time keeps running smoothly.
+  Duration _serverOffset = Duration.zero;
+  bool _hasServerTime = false;
+  int _lastRttMs = 0;
 
   // Bottom nav
   final _controller = NotchBottomBarController(index: 1);
@@ -324,11 +327,16 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     if (token == null || typedServerUrl == null) return;
 
+    // Measure round-trip time (RTT) so we can compensate for network delay
+    // when displaying server time.
+    final t0 = DateTime.now();
     final uri = Uri.parse('$typedServerUrl/api/attendance/checking-in');
     final response = await http.get(uri, headers: {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer $token',
     });
+    final t1 = DateTime.now();
+    final rttMs = t1.difference(t0).inMilliseconds;
 
     if (response.statusCode != 200) {
       debugPrint('Failed to fetch attendance status: ${response.statusCode} ${response.body}');
@@ -336,6 +344,22 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     }
 
     final data = jsonDecode(response.body);
+
+    // Optional: server time (ISO datetime). Used for a live, minute-ticking display.
+    // We estimate server time *at the moment the response is received* by adding RTT/2.
+    bool hasServerTime = false;
+    Duration computedOffset = _serverOffset;
+    final serverNowRaw = data['server_now']?.toString();
+    if (serverNowRaw != null && serverNowRaw.trim().isNotEmpty) {
+      try {
+        final serverNow = DateTime.parse(serverNowRaw).toLocal();
+        final serverAtReceive = serverNow.add(Duration(milliseconds: (rttMs / 2).round()));
+        computedOffset = serverAtReceive.difference(t1);
+        hasServerTime = true;
+      } catch (_) {
+        hasServerTime = false;
+      }
+    }
 
     final bool statusFlag = (data['status'] ?? false) == true;
     final bool hasAttendanceFlag = (data['has_attendance'] ?? false) == true;
@@ -448,41 +472,13 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       workHoursShortfall = _toHHMM(shortfallRaw);
       checkInImage = _cleanNullablePath(inImgRaw);
       checkOutImage = _cleanNullablePath(outImgRaw);
-    });
 
-    // Sync stopwatch
-    final initial = _parseDuration(workedHours);
-    if (isCurrentlyCheckedIn) {
-      stopwatchManager.resetStopwatch();
-      stopwatchManager.startStopwatch(initialTime: initial);
-    } else {
-      stopwatchManager.resetStopwatch();
-    }
-  }
-
-  Duration _parseDuration(String durationString) {
-    try {
-      final raw = durationString.trim();
-      if (raw.isEmpty) return Duration.zero;
-      final parts = raw.split(':');
-      if (parts.length < 2) return Duration.zero;
-      final int hours = int.tryParse(parts[0]) ?? 0;
-      final int minutes = int.tryParse(parts[1]) ?? 0;
-      int seconds = 0;
-      if (parts.length >= 3) {
-        seconds = int.tryParse(parts[2].split('.').first) ?? 0;
+      _lastRttMs = rttMs;
+      _hasServerTime = hasServerTime;
+      if (hasServerTime) {
+        _serverOffset = computedOffset;
       }
-      return Duration(hours: hours, minutes: minutes, seconds: seconds);
-    } catch (_) {
-      return Duration.zero;
-    }
-  }
-
-  String _formatDuration(Duration duration) {
-    // Display only HH:MM (no seconds)
-    final hours = duration.inHours.toString().padLeft(2, '0');
-    final minutes = (duration.inMinutes.remainder(60)).toString().padLeft(2, '0');
-    return '$hours:$minutes';
+    });
   }
 
   bool _hasValue(String? v) {
@@ -861,7 +857,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       ),
     );
   }
-
   Widget _buildHeader() {
     DateTime? parsedDate;
     if (attendanceDate.trim().isNotEmpty) {
@@ -870,8 +865,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       } catch (_) {}
     }
 
-    final dateLabel =
-    DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
+    final dateLabel = DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
     final checkInText = firstCheckIn ?? '-';
     final checkOutText = lastCheckOut ?? '-';
     final note = _statusNote().trim();
@@ -882,9 +876,10 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       child: SafeArea(
         bottom: false,
         child: Column(
-          mainAxisSize: MainAxisSize.min, // ✅ adaptive height (no empty space)
+          mainAxisSize: MainAxisSize.min, // Adaptive height (no empty space)
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Title row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -899,7 +894,30 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                 Text(dateLabel, style: const TextStyle(color: Colors.white70)),
               ],
             ),
+
+            // Server time (minutes only), centered and continuously updated
+            if (_hasServerTime) ...[
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: StreamBuilder<int>(
+                  // Light refresh so minute rollover updates quickly
+                  stream: Stream.periodic(const Duration(seconds: 5), (i) => i),
+                  builder: (context, _) {
+                    final serverNow = DateTime.now().add(_serverOffset);
+                    return Text(
+                      'Waktu Server • ${DateFormat('HH:mm').format(serverNow)}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    );
+                  },
+                ),
+              ),
+            ],
+
             const SizedBox(height: 16),
+
+            // Stats row
             Row(
               children: [
                 _headerStat(
@@ -926,25 +944,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                 ),
                 _headerStat(
                   label: 'Work Hours',
-                  value: isCurrentlyCheckedIn
-                      ? StreamBuilder<int>(
-                    stream: Stream.periodic(
-                      const Duration(seconds: 1),
-                          (_) => stopwatchManager.elapsed.inSeconds,
-                    ),
-                    builder: (context, snapshot) {
-                      final d = stopwatchManager.elapsed;
-                      return Text(
-                        _formatDuration(d),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
-                      );
-                    },
-                  )
-                      : Text(
+                  value: Text(
                     _toHHMMOrDash(workedHours),
                     style: const TextStyle(
                       color: Colors.white,
@@ -956,7 +956,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               ],
             ),
 
-            // ✅ Centered, only shown when non-empty
+            // Centered note, only shown when not empty
             if (note.isNotEmpty) ...[
               const SizedBox(height: 10),
               SizedBox(
@@ -1048,16 +1048,16 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     ),
                     const SizedBox(width: 10),
 
-                    // ✅ Name always vertically centered relative to avatar
+                    // Name is always vertically centered relative to the avatar
                     Expanded(
                       child: SizedBox(
-                        height: 40.0, // sama dengan tinggi avatar
+                        height: 40.0, // Same as the avatar height
                         child: Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
                             '$requestsEmpMyFirstName $requestsEmpMyLastName',
                             style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
-                            maxLines: 2, // boleh 2 baris
+                            maxLines: 2, // Up to 2 lines
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1218,7 +1218,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () async {
               await clearToken();
-              stopwatchManager.resetStopwatch();
               if (!mounted) return;
               Navigator.pushReplacementNamed(context, '/login');
             },
