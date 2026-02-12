@@ -1,3 +1,9 @@
+// checkin_checkout_form.dart (FINAL)
+// - Adds worked_seconds + is_working support from backend
+// - Work Hours runs live using server time offset when checked-in and not checked-out
+// - Work Hours freezes when checked-out (shows diff from server)
+// - Missing check-in is handled by server via worked_seconds rules
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -43,7 +49,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   // Attendance status (single-session)
   bool hasAttendance = false; // attendance record exists for resolved attendance_date
   bool hasCheckedIn = false; // first check-in exists
-  bool isCurrentlyCheckedIn = false; // checked-in but not checked-out
+  bool isCurrentlyCheckedIn = false; // checked-in but not checked-out (legacy)
   bool missingCheckIn = false; // checked-out exists but check-in missing
 
   // Server-driven action flags (from /api/attendance/checking-in)
@@ -54,7 +60,15 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String attendanceDate = ''; // yyyy-mm-dd (resolved)
   String? firstCheckIn;
   String? lastCheckOut;
+
+  // Legacy (HH:MM / HH:MM:SS from server); keep as fallback only.
   String workedHours = '00:00:00';
+
+  // New (preferred from API)
+  int workedSeconds = 0; // worked_seconds from API
+  bool isWorking = false; // is_working from API (running timer)
+  bool _hasWorkedSecondsFromApi = false; // true if API sends worked_seconds
+  DateTime? _serverNowAtLastFetch; // server-aligned time when status was fetched
 
   // Optional status helpers from backend (safe defaults if missing)
   String? minimumWorkingHour;
@@ -80,23 +94,19 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String get swipeDirection {
     if (canCheckIn) return 'Swipe ➜ CHECK IN';
     if (canCheckOut) {
-      return (lastCheckOut != null)
-          ? 'Swipe ⇦ UPDATE CHECK OUT'
-          : 'Swipe ⇦ CHECK OUT';
+      return (lastCheckOut != null) ? 'Swipe ⇦ UPDATE CHECK OUT' : 'Swipe ⇦ CHECK OUT';
     }
     return 'Attendance action not available';
   }
 
   /// Can the user clock-in now?
   /// Prefer server flags, fallback to legacy behavior.
-  bool get canCheckIn =>
-      serverCanClockIn || (!hasAttendance && !checkInCutoffPassed);
+  bool get canCheckIn => serverCanClockIn || (!hasAttendance && !checkInCutoffPassed);
 
   /// Can the user clock-out now?
-  /// In single-session mode: allow multiple check-outs (update last check-out).
+  /// Allow multiple check-outs (update last check-out).
   /// Also allow check-out when check-in cut-off has passed (missing check-in scenario).
-  bool get canCheckOut =>
-      serverCanClockOut || (hasAttendance || missingCheckIn || checkInCutoffPassed);
+  bool get canCheckOut => serverCanClockOut || (hasAttendance || missingCheckIn || checkInCutoffPassed);
 
   @override
   void initState() {
@@ -327,8 +337,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     if (token == null || typedServerUrl == null) return;
 
-    // Measure round-trip time (RTT) so we can compensate for network delay
-    // when displaying server time.
+    // RTT measurement to estimate server time at receive moment
     final t0 = DateTime.now();
     final uri = Uri.parse('$typedServerUrl/api/attendance/checking-in');
     final response = await http.get(uri, headers: {
@@ -345,26 +354,27 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     final data = jsonDecode(response.body);
 
-    // Optional: server time (ISO datetime). Used for a live, minute-ticking display.
-    // We estimate server time *at the moment the response is received* by adding RTT/2.
+    // Server time (ISO datetime): offset + capture receive-aligned timestamp
     bool hasServerTime = false;
     Duration computedOffset = _serverOffset;
+
+    DateTime? serverAtReceiveTs;
     final serverNowRaw = data['server_now']?.toString();
     if (serverNowRaw != null && serverNowRaw.trim().isNotEmpty) {
       try {
         final serverNow = DateTime.parse(serverNowRaw).toLocal();
-        final serverAtReceive = serverNow.add(Duration(milliseconds: (rttMs / 2).round()));
-        computedOffset = serverAtReceive.difference(t1);
+        serverAtReceiveTs = serverNow.add(Duration(milliseconds: (rttMs / 2).round()));
+        computedOffset = serverAtReceiveTs.difference(t1);
         hasServerTime = true;
       } catch (_) {
         hasServerTime = false;
       }
     }
+    serverAtReceiveTs ??= t1;
 
     final bool statusFlag = (data['status'] ?? false) == true;
     final bool hasAttendanceFlag = (data['has_attendance'] ?? false) == true;
 
-    // Optional newer API fields (server-driven)
     final bool cutoffPassed = (data['check_in_cutoff_passed'] ??
         data['check_in_cutoff_has_passed'] ??
         false) ==
@@ -373,69 +383,60 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final String suggestedAction =
     (data['suggested_action'] ?? data['action'] ?? '').toString().toLowerCase();
 
-    final bool canInFromApi =
-        (data['can_clock_in'] ?? data['can_check_in'] ?? false) == true;
-    final bool canOutFromApi =
-        (data['can_clock_out'] ?? data['can_check_out'] ?? false) == true;
+    final bool canInFromApi = (data['can_clock_in'] ?? data['can_check_in'] ?? false) == true;
+    final bool canOutFromApi = (data['can_clock_out'] ?? data['can_check_out'] ?? false) == true;
 
     final String? first =
-    (data['first_check_in'] ?? data['clock_in'] ?? data['clock_in_time'])
-        ?.toString();
-    final String? last = (data['last_check_out'])?.toString();
-
-    final String hours =
-    (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
-
-// Optional hints (may not exist depending on backend)
-    final String? minWorkRaw = (data['minimum_working_hour'] ??
-        data['minimum_work_hours'] ??
-        data['min_working_hour'])
+    (data['first_check_in'] ?? data['clock_in'] ?? data['clock_in_time'])?.toString();
+    final String? last = (data['last_check_out'] ?? data['clock_out'] ?? data['clock_out_time'])
         ?.toString();
 
-    final String? shortfallRaw = (data['work_hours_shortfall'] ??
-        data['work_hours_remaining'] ??
-        data['shortfall'])
+    final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
+
+    // New API fields (preferred)
+    final bool hasWorkedSec = data.containsKey('worked_seconds');
+    final int workedSec = int.tryParse((data['worked_seconds'] ?? 0).toString()) ?? 0;
+
+    final bool isWorkingFromApi =
+        (data['is_working'] ?? data['is_currently_working'] ?? false) == true;
+
+    // Optional hints
+    final String? minWorkRaw =
+    (data['minimum_working_hour'] ?? data['minimum_work_hours'] ?? data['min_working_hour'])
         ?.toString();
 
-    final bool belowMin = (data['work_hours_below_minimum'] ??
-        data['below_minimum_work_hours'] ??
-        false) ==
-        true;
-
-    final bool earlyOut = (data['checked_out_early'] ??
-        data['early_check_out'] ??
-        false) ==
-        true;
-
-    final String? inImgRaw = (data['check_in_image'] ??
-        data['clock_in_image'] ??
-        data['attendance_clock_in_image'])
+    final String? shortfallRaw =
+    (data['work_hours_shortfall'] ?? data['work_hours_remaining'] ?? data['shortfall'])
         ?.toString();
-    final String? outImgRaw = (data['check_out_image'] ??
-        data['clock_out_image'] ??
-        data['attendance_clock_out_image'])
+
+    final bool belowMin =
+        (data['work_hours_below_minimum'] ?? data['below_minimum_work_hours'] ?? false) == true;
+
+    final bool earlyOut = (data['checked_out_early'] ?? data['early_check_out'] ?? false) == true;
+
+    final String? inImgRaw =
+    (data['check_in_image'] ?? data['clock_in_image'] ?? data['attendance_clock_in_image'])
+        ?.toString();
+    final String? outImgRaw =
+    (data['check_out_image'] ?? data['clock_out_image'] ?? data['attendance_clock_out_image'])
         ?.toString();
 
     final String attDate = (data['attendance_date'] ?? '').toString();
 
-    final bool hasIn =
-        (data['has_checked_in'] ?? ((first ?? '').trim().isNotEmpty)) == true;
+    final bool hasIn = (data['has_checked_in'] ?? ((first ?? '').trim().isNotEmpty)) == true;
 
-    // Missing check-in can be explicitly returned by API, OR inferred when cut-off
-    // has passed and there's no check-in yet.
-    final bool missingIn = (data['missing_check_in'] ?? false) == true ||
-        (cutoffPassed && !hasIn);
+    // Missing check-in:
+    // - Prefer API flag
+    // - Fallback: cutoff passed and no check-in yet
+    final bool missingIn = (data['missing_check_in'] ?? false) == true || (cutoffPassed && !hasIn);
 
     // Decide which actions should be enabled:
-    // - Prefer explicit API flags when present
-    // - If suggested_action says clock_out, allow clock-out even when no attendance exists yet.
     final bool canClockIn =
     (data.containsKey('can_clock_in') || data.containsKey('can_check_in'))
         ? canInFromApi
         : (!hasAttendanceFlag && !cutoffPassed);
 
-    bool canClockOut =
-    (data.containsKey('can_clock_out') || data.containsKey('can_check_out'))
+    bool canClockOut = (data.containsKey('can_clock_out') || data.containsKey('can_check_out'))
         ? canOutFromApi
         : (hasAttendanceFlag || cutoffPassed || missingIn);
 
@@ -443,8 +444,16 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       canClockOut = true;
     }
 
+    // Determine "isWorking" (running timer) strictly from API if present;
+    // fallback to legacy "status" flag.
+    final bool finalIsWorking =
+    (data.containsKey('is_working') || data.containsKey('is_currently_working'))
+        ? isWorkingFromApi
+        : statusFlag;
+
     setState(() {
-      isCurrentlyCheckedIn = statusFlag;
+      // legacy
+      isCurrentlyCheckedIn = finalIsWorking;
 
       checkInCutoffPassed = cutoffPassed;
       serverCanClockIn = canClockIn;
@@ -458,14 +467,23 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       missingCheckIn = missingIn;
 
       attendanceDate = attDate;
-      firstCheckIn = (first != null && first.trim().isNotEmpty) ? first : null;
-      lastCheckOut = (last != null &&
-          last.trim().isNotEmpty &&
-          last.trim().toLowerCase() != 'null')
+
+      firstCheckIn = (first != null && first.trim().isNotEmpty && first.trim().toLowerCase() != 'null')
+          ? first
+          : null;
+
+      lastCheckOut = (last != null && last.trim().isNotEmpty && last.trim().toLowerCase() != 'null')
           ? last
           : null;
 
       workedHours = hours;
+
+      // new
+      _hasWorkedSecondsFromApi = hasWorkedSec;
+      workedSeconds = workedSec;
+      isWorking = finalIsWorking;
+      _serverNowAtLastFetch = serverAtReceiveTs;
+
       minimumWorkingHour = _toHHMM(minWorkRaw);
       workHoursBelowMinimum = belowMin;
       checkedOutEarly = earlyOut;
@@ -504,6 +522,149 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String _toHHMMOrDash(String? hhmmss) {
     final v = _toHHMM(hhmmss);
     return _hasValue(v) ? v! : '--:--';
+  }
+
+  // Formats a duration as HH:mm (minutes precision, no seconds).
+  String _formatDurationHHMM(Duration d) {
+    final totalMinutes = d.inMinutes;
+    final h = (totalMinutes ~/ 60).toString().padLeft(2, '0');
+    final m = (totalMinutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  String _formatSecondsHHMM(int seconds) {
+    final sec = seconds < 0 ? 0 : seconds;
+    final totalMinutes = sec ~/ 60;
+    final h = (totalMinutes ~/ 60).toString().padLeft(2, '0');
+    final m = (totalMinutes % 60).toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  // Parses API time string to DateTime.
+  // Supports ISO datetime and HH:mm / HH:mm:ss.
+  // Uses attendanceDate as the base date when only time is provided.
+  DateTime? _parseApiDateTime(String? raw, DateTime baseDate) {
+    if (!_hasValue(raw)) return null;
+    final s = raw!.trim();
+
+    // ISO datetime (preferred)
+    if (s.contains('T')) {
+      try {
+        return DateTime.parse(s).toLocal();
+      } catch (_) {}
+    }
+
+    // Time-only (HH:mm or HH:mm:ss)
+    final parts = s.split(':');
+    if (parts.length < 2) return null;
+
+    final hh = int.tryParse(parts[0]) ?? 0;
+    final mm = int.tryParse(parts[1]) ?? 0;
+
+    int ss = 0;
+    if (parts.length >= 3) {
+      ss = int.tryParse(parts[2].split('.').first) ?? 0;
+    }
+
+    return DateTime(baseDate.year, baseDate.month, baseDate.day, hh, mm, ss);
+  }
+
+  // Returns a base date from attendanceDate; falls back to "now" date.
+  DateTime _attendanceBaseDate(DateTime now) {
+    final ad = attendanceDate.trim();
+    final parsed = DateTime.tryParse(ad);
+    if (parsed != null) {
+      return DateTime(parsed.year, parsed.month, parsed.day);
+    }
+    return DateTime(now.year, now.month, now.day);
+  }
+
+  // Computes static work hours display (when not running).
+  String _computeWorkHoursStatic(DateTime now) {
+    // If API provides workedSeconds, prefer it (already includes missing-check-in rules).
+    if (_hasWorkedSecondsFromApi) {
+      return _formatSecondsHHMM(workedSeconds);
+    }
+
+    final base = _attendanceBaseDate(now);
+    final inDt = _parseApiDateTime(firstCheckIn, base);
+    var outDt = _parseApiDateTime(lastCheckOut, base);
+
+    // Missing check-in rule:
+    // - first checkout => usually 00:00
+    // - updated checkout => (lastOut - firstOut)
+    if (missingCheckIn) {
+      if (inDt == null || outDt == null) return '00:00';
+      if (outDt.isBefore(inDt)) outDt = outDt.add(const Duration(days: 1));
+      final diff = outDt.difference(inDt);
+      return _formatDurationHHMM(diff.isNegative ? Duration.zero : diff);
+    }
+
+    // Normal (has check-in and check-out)
+    if (inDt != null && outDt != null) {
+      if (outDt.isBefore(inDt)) outDt = outDt.add(const Duration(days: 1));
+      final diff = outDt.difference(inDt);
+      return _formatDurationHHMM(diff.isNegative ? Duration.zero : diff);
+    }
+
+    // Fallback to server-provided workedHours if available
+    return _toHHMMOrDash(workedHours);
+  }
+
+  // Builds the Work Hours value widget.
+  // - Preferred: API worked_seconds + is_working
+  // - Fallback: legacy time diff when checked-in
+  Widget _buildWorkHoursValue(TextStyle style) {
+    DateTime nowServerAligned() =>
+        _hasServerTime ? DateTime.now().add(_serverOffset) : DateTime.now();
+
+    // Preferred: API provides worked_seconds (+ is_working)
+    if (_hasWorkedSecondsFromApi) {
+      if (!isWorking) {
+        // Freeze after checkout, or missing check-in cases
+        return Text(_formatSecondsHHMM(workedSeconds), style: style);
+      }
+
+      // Running timer: worked_seconds + (now - serverNowAtLastFetch)
+      return StreamBuilder<int>(
+        stream: Stream.periodic(const Duration(seconds: 1), (i) => i),
+        builder: (context, _) {
+          final now = nowServerAligned();
+          final base = _serverNowAtLastFetch ?? now;
+          final delta = now.difference(base).inSeconds;
+          final total = workedSeconds + (delta < 0 ? 0 : delta);
+          return Text(_formatSecondsHHMM(total), style: style);
+        },
+      );
+    }
+
+    // Fallback: legacy running condition (checked-in and not missing check-in)
+    final bool shouldRun = isCurrentlyCheckedIn && _hasValue(firstCheckIn) && !missingCheckIn;
+
+    if (!shouldRun) {
+      final now = nowServerAligned();
+      return Text(_computeWorkHoursStatic(now), style: style);
+    }
+
+    // Legacy running work hours: (serverNow - firstCheckIn), updates periodically.
+    return StreamBuilder<int>(
+      stream: Stream.periodic(const Duration(seconds: 5), (i) => i),
+      builder: (context, _) {
+        final now = nowServerAligned();
+        final base = _attendanceBaseDate(now);
+        final inDt = _parseApiDateTime(firstCheckIn, base);
+
+        if (inDt == null) {
+          return Text(_toHHMMOrDash(workedHours), style: style);
+        }
+
+        final diff = now.difference(inDt);
+        return Text(
+          _formatDurationHHMM(diff.isNegative ? Duration.zero : diff),
+          style: style,
+        );
+      },
+    );
   }
 
   String _statusNote() {
@@ -556,7 +717,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     return 'Attendance updated.';
   }
-
 
   String? _cleanNullablePath(dynamic raw) {
     if (raw == null) return null;
@@ -709,7 +869,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     }
 
     if (!mounted) return null;
-    showActionFailedDialog(context, isClockIn ? 'Check-in Failed' : 'Check-out Failed', _extractErrorMessage(response.body));
+    showActionFailedDialog(
+      context,
+      isClockIn ? 'Check-in Failed' : 'Check-out Failed',
+      _extractErrorMessage(response.body),
+    );
     return null;
   }
 
@@ -740,7 +904,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         }
 
         if (didOut && mounted) {
-          // This happens when check-in cut-off has passed and user proceeds to check-out.
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text(
@@ -782,7 +945,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         await refreshAttendanceStatus();
         if (missing && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.')),
+            const SnackBar(
+              content: Text(
+                'Check-out recorded but check-in is missing. Please submit an attendance request.',
+              ),
+            ),
           );
         }
       }
@@ -795,7 +962,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       await refreshAttendanceStatus();
       if (missing && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.')),
+          const SnackBar(
+            content: Text(
+              'Check-out recorded but check-in is missing. Please submit an attendance request.',
+            ),
+          ),
         );
       }
     }
@@ -817,7 +988,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Attendance', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+                Text('Attendance',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
                 Text('00:00:00', style: TextStyle(color: Colors.white)),
               ],
             ),
@@ -848,20 +1020,21 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         padding: const EdgeInsets.symmetric(horizontal: 4.0),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center, // center horizontally
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(
               label,
-              textAlign: TextAlign.center, // center text (for wrapping)
+              textAlign: TextAlign.center,
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
             const SizedBox(height: 4),
-            Center(child: value), // center the value widget
+            Center(child: value),
           ],
         ),
       ),
     );
   }
+
   Widget _buildHeader() {
     DateTime? parsedDate;
     if (attendanceDate.trim().isNotEmpty) {
@@ -881,7 +1054,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       child: SafeArea(
         bottom: false,
         child: Column(
-          mainAxisSize: MainAxisSize.min, // Adaptive height (no empty space)
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Title row
@@ -906,7 +1079,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               SizedBox(
                 width: double.infinity,
                 child: StreamBuilder<int>(
-                  // Light refresh so minute rollover updates quickly
                   stream: Stream.periodic(const Duration(seconds: 5), (i) => i),
                   builder: (context, _) {
                     final serverNow = DateTime.now().add(_serverOffset);
@@ -949,9 +1121,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                 ),
                 _headerStat(
                   label: 'Work Hours',
-                  value: Text(
-                    _toHHMMOrDash(workedHours),
-                    style: const TextStyle(
+                  value: _buildWorkHoursValue(
+                    const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 18,
@@ -961,7 +1132,6 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               ],
             ),
 
-            // Centered note, only shown when not empty
             if (note.isNotEmpty) ...[
               const SizedBox(height: 10),
               SizedBox(
@@ -1053,16 +1223,16 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                     ),
                     const SizedBox(width: 10),
 
-                    // Name is always vertically centered relative to the avatar
+                    // Name
                     Expanded(
                       child: SizedBox(
-                        height: 40.0, // Same as the avatar height
+                        height: 40.0,
                         child: Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
                             '$requestsEmpMyFirstName $requestsEmpMyLastName',
                             style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
-                            maxLines: 2, // Up to 2 lines
+                            maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1170,7 +1340,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                   child: Container(
                     width: MediaQuery.of(context).size.width * 0.12,
                     height: MediaQuery.of(context).size.height * 0.06,
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
+                    decoration:
+                    BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
                     child: const Icon(Icons.arrow_forward, color: Colors.green, size: 30.0),
                   ),
                 ),
@@ -1188,7 +1359,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
                   child: Container(
                     width: MediaQuery.of(context).size.width * 0.12,
                     height: MediaQuery.of(context).size.height * 0.06,
-                    decoration: BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
+                    decoration:
+                    BoxDecoration(borderRadius: BorderRadius.circular(10.0), color: Colors.white),
                     child: const Icon(Icons.arrow_back, color: Colors.red, size: 30.0),
                   ),
                 ),
