@@ -300,20 +300,32 @@ Future<void> unreadNotificationsCount() async {
   if (!isAuthenticated) return;
 
   final prefs = await SharedPreferences.getInstance();
-  var token = prefs.getString("token");
-  var typed_serverUrl = prefs.getString("typed_url");
+  final token = prefs.getString("token");
+  final typed_serverUrl = prefs.getString("typed_url");
 
   if (token == null || typed_serverUrl == null) return;
 
-  var uri = Uri.parse('$typed_serverUrl/api/notifications/notifications/list/unread');
-  var response = await http.get(uri, headers: {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer $token",
-  });
+  final uri = Uri.parse('$typed_serverUrl/api/notifications/notifications/list/unread');
 
-  if (response.statusCode == 200) {
-    notificationsCount = jsonDecode(response.body)['count'];
-    isLoading = false;
+  try {
+    final response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    }).timeout(const Duration(seconds: 3));
+
+    if (response.statusCode == 200) {
+      notificationsCount = jsonDecode(response.body)['count'];
+      isLoading = false;
+      return;
+    }
+
+    print('Unread notifications count failed with status: ${response.statusCode}');
+  } on SocketException catch (e) {
+    print('Connection error fetching unread notifications count: $e');
+  } on TimeoutException catch (e) {
+    print('Timeout fetching unread notifications count: $e');
+  } catch (e) {
+    print('Error fetching unread notifications count: $e');
   }
 }
 
