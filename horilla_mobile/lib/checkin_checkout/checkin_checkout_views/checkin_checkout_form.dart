@@ -782,9 +782,9 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
             true;
 
     final String? first =
-    (data['first_check_in'] ?? data['clock_in'] ?? data['clock_in_time'])?.toString();
+    (data['first_check_in'] ?? data['clock_in_time'] ?? data['clock_in'])?.toString();
     final String? last =
-    (data['last_check_out'] ?? data['clock_out'] ?? data['clock_out_time'])?.toString();
+    (data['last_check_out'] ?? data['clock_out_time'] ?? data['clock_out'])?.toString();
 
     final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
 
@@ -803,9 +803,17 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final String? shortfallRaw =
     (data['work_hours_shortfall'] ?? data['work_hours_remaining'] ?? data['shortfall'])
         ?.toString();
+    final bool hasBelowMinKey = data.containsKey('work_hours_below_minimum') ||
+        data.containsKey('below_minimum_work_hours') ||
+        data.containsKey('below_minimum') ||
+        data.containsKey('below_min');
+
+    final bool hasShortfallKey = data.containsKey('work_hours_shortfall') ||
+        data.containsKey('work_hours_remaining') ||
+        data.containsKey('shortfall');
 
     final bool belowMin =
-        (data['work_hours_below_minimum'] ?? data['below_minimum_work_hours'] ?? false) == true;
+        (data['work_hours_below_minimum'] ?? data['below_minimum_work_hours'] ?? data['below_minimum'] ?? data['below_min'] ?? false) == true;
 
     final bool earlyOut = (data['checked_out_early'] ?? data['early_check_out'] ?? false) == true;
 
@@ -951,7 +959,9 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       _serverNowAtLastFetch = serverAtReceiveTs;
 
       minimumWorkingHour = _toHHMMFromAny(minWorkRaw);
-      workHoursBelowMinimum = belowMin;
+
+// Prefer server flags when provided; otherwise compute from worked_seconds vs required minutes.
+      workHoursBelowMinimum = hasBelowMinKey ? belowMin : false;
       checkedOutEarly = earlyOut;
 
       lateCheckIn = late;
@@ -970,6 +980,21 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       outMode = _normMode(outModeRaw);
 
       workHoursShortfall = _toHHMMFromAny(shortfallRaw);
+
+// Fallback compute shortfall/below-min when API doesn't provide it.
+      if (!isPresenceOnly && _hasWorkedSecondsFromApi) {
+        final reqMin = _requiredWorkMinutes();
+        if (reqMin != null && reqMin > 0) {
+          final shortSec = (reqMin * 60) - workedSeconds;
+          final short = shortSec > 0 ? shortSec : 0;
+          if (!hasShortfallKey) {
+            workHoursShortfall = short > 0 ? _formatSecondsHHMM(short) : null;
+          }
+          if (!hasBelowMinKey) {
+            workHoursBelowMinimum = short > 0 && _hasValue(lastCheckOut);
+          }
+        }
+      }
 
       checkInImage = _cleanNullablePath(inImgRaw);
       checkOutImage = _cleanNullablePath(outImgRaw);
@@ -1273,9 +1298,93 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
 
 
-// ===== Shift info (compact, no title) =====
 
-// ===== Shift info (compact, no title) =====
+  String _fmtHHMM(DateTime dt) {
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final mm = dt.minute.toString().padLeft(2, '0');
+    return '$hh:$mm';
+  }
+
+  int? _requiredWorkMinutes() {
+    final req = _hhmmToMinutes(minimumWorkingHour);
+    if (req != null && req > 0) return req;
+
+    final s = _hhmmToMinutes(shiftStart);
+    final e = _hhmmToMinutes(shiftEnd);
+    if (s == null || e == null) return null;
+    var d = e - s;
+    if (d < 0) d += 24 * 60;
+    return d > 0 ? d : null;
+  }
+
+  bool get _isOnDutyDay {
+    return isPresenceOnly || _normMode(inMode) == 'ON_DUTY' || _normMode(outMode) == 'ON_DUTY';
+  }
+
+  bool get _shouldShowExpectedOutLine {
+    // Don't confuse users on "missing check-in" days (first punch is OUT)
+    if (missingCheckIn) return false;
+
+    // Only meaningful after we have a check-in time.
+    if (!_hasValue(firstCheckIn)) return false;
+
+    // Show only when it's actionable/needed:
+    // - still working, OR
+    // - already checked-out but work hours are still below minimum (so user knows what OUT time is expected).
+    if (isWorking) return true;
+
+    if (workHoursBelowMinimum && (serverCanUpdateClockOut || serverCanClockOut)) return true;
+
+    return false;
+  }
+
+  String? _expectedOutDisplay() {
+    if (!_shouldShowExpectedOutLine) return null;
+
+    // On Duty: always show normal shift end (no flex expected out).
+    if (_isOnDutyDay) {
+      if (_hasValue(shiftEnd)) return shiftEnd!;
+      return null;
+    }
+
+    final now = _hasServerTime ? DateTime.now().add(_serverOffset) : DateTime.now();
+    final base = _attendanceBaseDate(now);
+
+    final inDt = _parseApiDateTime(firstCheckIn, base);
+    if (inDt == null) return null;
+
+    // Flex rule:
+    // - When check-in happens *within* the Flex In window, expected out is based on actual check-in.
+    // - When check-in happens *after* Flex In ends, expected out is capped at the latest flex start
+    //   (shiftStart + flexDuration). This avoids extending expected out later just because the
+    //   employee arrived late.
+    DateTime baseStart = inDt;
+    final flexLatest = _latestFlexStartDateTime(base);
+    if (flexLatest != null && inDt.isAfter(flexLatest)) {
+      baseStart = flexLatest;
+    }
+
+    final reqMin = _requiredWorkMinutes();
+    if (reqMin == null || reqMin <= 0) return null;
+
+    final outDt = baseStart.add(Duration(minutes: reqMin));
+    return _fmtHHMM(outDt);
+  }
+
+  DateTime? _latestFlexStartDateTime(DateTime baseDate) {
+    // Flex In uses the same value as `graceTime` in API/UI (duration like HH:mm(:ss)).
+    // Latest flex start = shiftStart + flexDuration.
+    if (!_hasValue(shiftStart) || !_hasValue(graceTime)) return null;
+
+    final start = _parseHHMMToTimeOfDay(shiftStart!);
+    if (start == null) return null;
+
+    final flexDur = _parseGraceToDuration(graceTime!);
+    if (flexDur.inSeconds <= 0) return null;
+
+    final startDt = DateTime(baseDate.year, baseDate.month, baseDate.day, start.hour, start.minute);
+    return startDt.add(flexDur);
+  }
 
   Widget _buildShiftInfoSection() {
     final shiftText = (_hasValue(shiftStart) && _hasValue(shiftEnd))
@@ -1285,6 +1394,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final graceShort = _graceShortDisplay();
     final cutoffIn = _hasValue(checkInCutoffTime) ? checkInCutoffTime! : '--:--';
     final cutoffOut = _hasValue(checkOutCutoffTime) ? checkOutCutoffTime! : '--:--';
+
+    final expectedOut = _expectedOutDisplay();
 
     // No extra "card" wrapper here (to avoid nested boxes). Just chips.
     return Padding(
@@ -1313,6 +1424,14 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               Expanded(child: _infoChip('OUT ≤ $cutoffOut')),
             ],
           ),
+
+          if (expectedOut != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Expected Out : $expectedOut',
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+            ),
+          ],
         ],
       ),
     );
