@@ -1055,44 +1055,55 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final hasIn = _hasValue(firstCheckIn);
     final hasOut = _hasValue(lastCheckOut);
 
+    // No attendance record yet (and not in missing-check-in mode)
     if (!hasAttendance && !missingCheckIn) {
-      if (checkInCutoffPassed && serverCanClockOut) return 'Cut-off • Can out';
-      return 'No record • Swipe in';
+      if (checkInCutoffPassed && serverCanClockOut) {
+        return 'Check In cutoff passed • Check Out available';
+      }
+      return 'No record yet • Please Check In';
     }
 
+    // Missing Check In scenarios
     if (missingCheckIn) {
-      if (hasOut) return 'Missing in • Out saved';
-      return 'Missing in • Can out';
+      if (hasOut) return 'Missing Check In • Check Out saved';
+      return 'Missing Check In • Check Out available';
     }
 
+    // Checked In but not Checked Out yet
     if (hasIn && !hasOut) {
       if (lateCheckIn && _hasValue(lateBy)) {
         final planned = _plannedCheckoutFromShiftStart();
-        if (planned != null) return 'Late ${lateBy!} • Out $planned';
+        if (planned != null) return 'Late ${lateBy!} • Check Out at $planned';
         return 'Late ${lateBy!}';
       }
-      return "Checked in • Don't forget out";
+      return 'Checked In • Don’t forget to Check Out';
     }
 
+    // Checked In and Checked Out
     if (hasIn && hasOut) {
       if (workHoursBelowMinimum) {
         if (lateCheckIn && _hasValue(lateBy)) {
-          if (_hasValue(workHoursShortfall)) return 'Late ${lateBy!} • Short ${workHoursShortfall!}';
-          return 'Late ${lateBy!} • Below min';
+          if (_hasValue(workHoursShortfall)) {
+            return 'Late ${lateBy!} • Short by ${workHoursShortfall!}';
+          }
+          return 'Late ${lateBy!} • Below minimum hours';
         }
-        if (_hasValue(workHoursShortfall)) return 'Short ${workHoursShortfall!}';
-        if (_hasValue(minimumWorkingHour)) return 'Below min ${minimumWorkingHour!}';
-        return 'Below min';
+
+        if (_hasValue(workHoursShortfall)) return 'Short by ${workHoursShortfall!}';
+        if (_hasValue(minimumWorkingHour)) return 'Below minimum (${minimumWorkingHour!})';
+        return 'Below minimum hours';
       }
 
-      if (checkedOutEarly) return 'Early out';
-      return 'Saved';
+      if (checkedOutEarly) return 'Checked Out early';
+      return 'Attendance recorded';
     }
 
-    if (!hasIn && hasOut) return 'Out saved • Missing in';
+    // Edge case: Check Out exists but Check In is missing
+    if (!hasIn && hasOut) return 'Check Out saved • Missing Check In';
 
     return '';
   }
+
 
 // ===== Media helpers =====
 
@@ -1760,7 +1771,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
           if (didOut && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.'),
+                content: Text('Check Out recorded, but no Check In was found. Please submit an attendance request.'),
               ),
             );
           }
@@ -1816,7 +1827,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
           if (missing && mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.'),
+                content: Text('Check Out recorded, but no Check In was found. Please submit an attendance request.'),
               ),
             );
           }
@@ -1836,7 +1847,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       if (missing && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Check-out recorded but check-in is missing. Please submit an attendance request.'),
+            content: Text('Check Out recorded, but no Check In was found. Please submit an attendance request.'),
           ),
         );
       }
