@@ -216,11 +216,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   Future<void> _initializeData() async {
     try {
       await fetchToken();
-
-      // Initialize feature flags
-      final faceDetectionEnabled = await getFaceDetection();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('face_detection', faceDetectionEnabled);
+      await _ensureFaceDetectionAlwaysOn();
 
       await Future.wait<void>([
         getBaseUrl(),
@@ -246,6 +242,31 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final token = prefs.getString('token');
     setState(() => getToken = token ?? '');
   }
+
+Future<void> _ensureFaceDetectionAlwaysOn() async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('token');
+  final typedServerUrl = prefs.getString('typed_url');
+
+  await prefs.setBool('face_detection', true);
+
+  if (token == null || typedServerUrl == null) return;
+
+  final uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
+  try {
+    await http.put(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: jsonEncode({'start': true}),
+    );
+  } catch (_) {
+    // Ignore network errors; face flow will still proceed and server will validate.
+  }
+}
+
 
   Future<void> getBaseUrl() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1055,21 +1076,16 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final hasIn = _hasValue(firstCheckIn);
     final hasOut = _hasValue(lastCheckOut);
 
-    // No attendance record yet (and not in missing-check-in mode)
     if (!hasAttendance && !missingCheckIn) {
-      if (checkInCutoffPassed && serverCanClockOut) {
-        return 'Check In cutoff passed • Check Out available';
-      }
+      if (checkInCutoffPassed && serverCanClockOut) return 'Check In cutoff passed • Check Out available';
       return 'No record yet • Please Check In';
     }
 
-    // Missing Check In scenarios
     if (missingCheckIn) {
       if (hasOut) return 'Missing Check In • Check Out saved';
       return 'Missing Check In • Check Out available';
     }
 
-    // Checked In but not Checked Out yet
     if (hasIn && !hasOut) {
       if (lateCheckIn && _hasValue(lateBy)) {
         final planned = _plannedCheckoutFromShiftStart();
@@ -1079,16 +1095,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       return 'Checked In • Don’t forget to Check Out';
     }
 
-    // Checked In and Checked Out
     if (hasIn && hasOut) {
       if (workHoursBelowMinimum) {
         if (lateCheckIn && _hasValue(lateBy)) {
-          if (_hasValue(workHoursShortfall)) {
-            return 'Late ${lateBy!} • Short by ${workHoursShortfall!}';
-          }
+          if (_hasValue(workHoursShortfall)) return 'Late ${lateBy!} • Short by ${workHoursShortfall!}';
           return 'Late ${lateBy!} • Below minimum hours';
         }
-
         if (_hasValue(workHoursShortfall)) return 'Short by ${workHoursShortfall!}';
         if (_hasValue(minimumWorkingHour)) return 'Below minimum (${minimumWorkingHour!})';
         return 'Below minimum hours';
@@ -1098,12 +1110,10 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       return 'Attendance recorded';
     }
 
-    // Edge case: Check Out exists but Check In is missing
     if (!hasIn && hasOut) return 'Check Out saved • Missing Check In';
 
     return '';
   }
-
 
 // ===== Media helpers =====
 
@@ -1439,7 +1449,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
           if (expectedOut != null) ...[
             const SizedBox(height: 10),
             Text(
-              'Expected Out : $expectedOut',
+              'Expected Check Out : $expectedOut',
               style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
             ),
           ],
@@ -1732,7 +1742,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     if (!canCheckIn) return;
 
     final prefs = await SharedPreferences.getInstance();
-    final faceDetection = prefs.getBool('face_detection') ?? false;
+    final faceDetection = true;
 
     // Backend-driven location requirement (WFA / ON_DUTY)
     if (requiresLocationIn) {
@@ -1794,7 +1804,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     if (!canCheckOut) return;
 
     final prefs = await SharedPreferences.getInstance();
-    final faceDetection = prefs.getBool('face_detection') ?? false;
+    final faceDetection = true;
 
     // Backend-driven location requirement (WFA / ON_DUTY)
     if (requiresLocationOut) {
