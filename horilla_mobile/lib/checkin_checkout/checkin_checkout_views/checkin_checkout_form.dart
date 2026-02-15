@@ -243,29 +243,29 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     setState(() => getToken = token ?? '');
   }
 
-Future<void> _ensureFaceDetectionAlwaysOn() async {
-  final prefs = await SharedPreferences.getInstance();
-  final token = prefs.getString('token');
-  final typedServerUrl = prefs.getString('typed_url');
+  Future<void> _ensureFaceDetectionAlwaysOn() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
 
-  await prefs.setBool('face_detection', true);
+    await prefs.setBool('face_detection', true);
 
-  if (token == null || typedServerUrl == null) return;
+    if (token == null || typedServerUrl == null) return;
 
-  final uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
-  try {
-    await http.put(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({'start': true}),
-    );
-  } catch (_) {
-    // Ignore network errors; face flow will still proceed and server will validate.
+    final uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
+    try {
+      await http.put(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'start': true}),
+      );
+    } catch (_) {
+      // Ignore network errors; face flow will still proceed and server will validate.
+    }
   }
-}
 
 
   Future<void> getBaseUrl() async {
@@ -623,12 +623,89 @@ Future<void> _ensureFaceDetectionAlwaysOn() async {
   }
 
   DateTime _attendanceBaseDate(DateTime now) {
-    final ad = attendanceDate.trim();
-    final parsed = DateTime.tryParse(ad);
-    if (parsed != null) {
-      return DateTime(parsed.year, parsed.month, parsed.day);
+    // Prefer the resolved attendance date from API (yyyy-mm-dd).
+    if (attendanceDate.trim().isNotEmpty) {
+      try {
+        final d = DateTime.parse(attendanceDate).toLocal();
+        return DateTime(d.year, d.month, d.day);
+      } catch (_) {}
     }
     return DateTime(now.year, now.month, now.day);
+  }
+
+
+
+  String _statusNote() {
+    final hasIn = _hasValue(firstCheckIn);
+    final hasOut = _hasValue(lastCheckOut);
+
+    // Best-effort: derive check-out cutoff state from server time + cutoff time.
+    // This avoids false positives when can_clock_out is false for reasons like WFO.
+    final now = _hasServerTime ? DateTime.now().add(_serverOffset) : DateTime.now();
+    bool outCutoffPassed = false;
+
+    if (_hasValue(checkOutCutoffTime)) {
+      final base = _attendanceBaseDate(now);
+      var cutoff = _parseApiDateTime(checkOutCutoffTime, base);
+      if (cutoff != null) {
+        final start = _hasValue(shiftStart) ? _parseApiDateTime(shiftStart, base) : null;
+        final end = _hasValue(shiftEnd) ? _parseApiDateTime(shiftEnd, base) : null;
+
+        final isNightShift = (start != null && end != null && end.isBefore(start));
+        if (isNightShift && start != null && cutoff.isBefore(start)) {
+          cutoff = cutoff.add(const Duration(days: 1));
+        }
+
+        outCutoffPassed = !now.isBefore(cutoff);
+      }
+    }
+
+    if (!hasAttendance && !missingCheckIn) {
+      if (outCutoffPassed && !serverCanClockOut) {
+        return 'No attendance recorded • Please submit an attendance request';
+      }
+      if (checkInCutoffPassed && serverCanClockOut) {
+        return 'Check In cutoff passed • Check Out available';
+      }
+      return 'No record yet • Please Check In';
+    }
+
+    if (missingCheckIn) {
+      if (hasOut) return 'Missing Check In • Check Out saved';
+      return 'Missing Check In • Check Out available';
+    }
+
+    if (hasIn && !hasOut) {
+      if (outCutoffPassed && !serverCanClockOut) {
+        return 'Check Out cutoff passed • Please submit an attendance request';
+      }
+
+      if (lateCheckIn && _hasValue(lateBy)) {
+        final planned = _plannedCheckoutFromShiftStart();
+        if (planned != null) return 'Late ${lateBy!} • Check Out at $planned';
+        return 'Late ${lateBy!}';
+      }
+      return 'Checked In • Don’t forget to Check Out';
+    }
+
+    if (hasIn && hasOut) {
+      if (workHoursBelowMinimum) {
+        if (lateCheckIn && _hasValue(lateBy)) {
+          if (_hasValue(workHoursShortfall)) return 'Late ${lateBy!} • Short by ${workHoursShortfall!}';
+          return 'Late ${lateBy!} • Below minimum hours';
+        }
+        if (_hasValue(workHoursShortfall)) return 'Short by ${workHoursShortfall!}';
+        if (_hasValue(minimumWorkingHour)) return 'Below minimum (${minimumWorkingHour!})';
+        return 'Below minimum hours';
+      }
+
+      if (checkedOutEarly) return 'Checked Out early';
+      return 'Attendance recorded';
+    }
+
+    if (!hasIn && hasOut) return 'Check Out saved • Missing Check In';
+
+    return '';
   }
 
 // ===== lat,lng proof helpers =====
@@ -1072,48 +1149,7 @@ Future<void> _ensureFaceDetectionAlwaysOn() async {
     return Text(_computeWorkHoursStatic(now), style: style);
   }
 
-  String _statusNote() {
-    final hasIn = _hasValue(firstCheckIn);
-    final hasOut = _hasValue(lastCheckOut);
 
-    if (!hasAttendance && !missingCheckIn) {
-      if (checkInCutoffPassed && serverCanClockOut) return 'Check In cutoff passed • Check Out available';
-      return 'No record yet • Please Check In';
-    }
-
-    if (missingCheckIn) {
-      if (hasOut) return 'Missing Check In • Check Out saved';
-      return 'Missing Check In • Check Out available';
-    }
-
-    if (hasIn && !hasOut) {
-      if (lateCheckIn && _hasValue(lateBy)) {
-        final planned = _plannedCheckoutFromShiftStart();
-        if (planned != null) return 'Late ${lateBy!} • Check Out at $planned';
-        return 'Late ${lateBy!}';
-      }
-      return 'Checked In • Don’t forget to Check Out';
-    }
-
-    if (hasIn && hasOut) {
-      if (workHoursBelowMinimum) {
-        if (lateCheckIn && _hasValue(lateBy)) {
-          if (_hasValue(workHoursShortfall)) return 'Late ${lateBy!} • Short by ${workHoursShortfall!}';
-          return 'Late ${lateBy!} • Below minimum hours';
-        }
-        if (_hasValue(workHoursShortfall)) return 'Short by ${workHoursShortfall!}';
-        if (_hasValue(minimumWorkingHour)) return 'Below minimum (${minimumWorkingHour!})';
-        return 'Below minimum hours';
-      }
-
-      if (checkedOutEarly) return 'Checked Out early';
-      return 'Attendance recorded';
-    }
-
-    if (!hasIn && hasOut) return 'Check Out saved • Missing Check In';
-
-    return '';
-  }
 
 // ===== Media helpers =====
 
