@@ -73,7 +73,7 @@ class _LoginPageState extends State<LoginPage> {
 
         var employeeId = responseBody['employee']?['id'] ?? 0;
         var companyId = responseBody['company_id'] ?? 0;
-        bool face_detection = responseBody['face_detection'] ?? false;
+        bool face_detection = true;
         bool geo_fencing = responseBody['geo_fencing'] ?? false;
         var face_detection_image = responseBody['face_detection_image']?.toString() ?? '';
 
@@ -83,6 +83,7 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString("typed_url", serverAddress);
         await prefs.setString("face_detection_image", face_detection_image);
         await prefs.setBool("face_detection", face_detection);
+        await _forceFaceDetectionOn(serverAddress, token);
         await prefs.setBool("geo_fencing", geo_fencing);
         await prefs.setInt("employee_id", employeeId);
         await prefs.setInt("company_id", companyId);
@@ -118,6 +119,22 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+
+  Future<void> _forceFaceDetectionOn(String serverAddress, String token) async {
+    final uri = Uri.parse('$serverAddress/api/facedetection/config/');
+    try {
+      await http.put(
+        uri,
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+        body: jsonEncode({"start": true}),
+      );
+    } catch (_) {
+      // Intentionally ignored. Face detection is enforced in the client anyway.
+    }
+  }
 
   void getConnectivity() {
     // subscription = InternetConnectionChecker().onStatusChange.listen((status) {
