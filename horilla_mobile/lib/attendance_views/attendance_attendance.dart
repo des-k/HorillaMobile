@@ -3194,7 +3194,7 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
               // Only show if permission is true
               if (_permissionAttendanceRequest)
                 ListTile(
-                  title: const Text('Attendance Request'),
+                  title: const Text('Requests'),
                   onTap: () {
                     Navigator.pushNamed(context, '/attendance_request');
                   },
@@ -3469,11 +3469,11 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
               isScrollable: true,
               tabs: [
                 Tab(text: 'My Attendances ($myAttendances)'),
-               if (attendanceTypeCheck == true)...[
-                 Tab(text: 'To Validate ($toValidate)'),
-                 Tab(text: 'Overtime ($overtime)'),
-                 Tab(text: 'Validated ($validated)'),
-               ]
+                if (attendanceTypeCheck == true)...[
+                  Tab(text: 'To Validate ($toValidate)'),
+                  Tab(text: 'Overtime ($overtime)'),
+                  Tab(text: 'Validated ($validated)'),
+                ]
               ],
             ),
             SizedBox(height: MediaQuery.of(context).size.height * 0.01),
@@ -4683,16 +4683,16 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
                                 width: double.infinity,
                                 child: ElevatedButton(
                                   onPressed: () async {
-                                   if (isSaveClick == true) {
-                                     isSaveClick = false;
-                                     Map<String, dynamic> validatedDetails = {
-                                       "id": record['id'],
-                                     };
-                                     await validateAttendance(validatedDetails);
-                                     Navigator.of(context).pop();
-                                     Navigator.of(context).pop();
-                                     showValidateAnimation();
-                                   }
+                                    if (isSaveClick == true) {
+                                      isSaveClick = false;
+                                      Map<String, dynamic> validatedDetails = {
+                                        "id": record['id'],
+                                      };
+                                      await validateAttendance(validatedDetails);
+                                      Navigator.of(context).pop();
+                                      Navigator.of(context).pop();
+                                      showValidateAnimation();
+                                    }
                                   },
                                   style: ButtonStyle(
                                     backgroundColor:
