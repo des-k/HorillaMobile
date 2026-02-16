@@ -76,7 +76,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String? lastCheckOut;
 
   // Legacy (HH:MM / HH:MM:SS from server); keep as fallback only.
-  String workedHours = '00:00:00';
+  String workedHours = '00:00';
 
   // New (preferred from API)
   int workedSeconds = 0; // worked_seconds from API
@@ -480,8 +480,13 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
   String? _toHHMMFromAny(dynamic raw) {
     if (raw == null) return null;
-    final s = raw.toString().trim();
+    var s = raw.toString().trim();
     if (s.isEmpty || s.toLowerCase() == 'null') return null;
+
+    // normalize legacy dot format "02.08" => "02:08" (only when it's a simple time)
+    if (!s.contains('T') && s.contains('.') && !s.contains(':') && RegExp(r'^\d{1,2}\.\d{1,2}(?:\.\d{1,2})?$').hasMatch(s)) {
+      s = s.replaceAll('.', ':');
+    }
 
     // ISO datetime => HH:mm
     if (s.contains('T')) {
@@ -491,11 +496,24 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       } catch (_) {}
     }
 
-    // HH:mm(:ss)
+    // 12-hour (AM/PM) => HH:mm
+    if (RegExp(r'\b(am|pm)\b', caseSensitive: false).hasMatch(s)) {
+      try {
+        final t = DateFormat('hh:mm a').parseLoose(s);
+        return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+      } catch (_) {}
+      try {
+        final t = DateFormat('hh:mm:ss a').parseLoose(s);
+        return '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+      } catch (_) {}
+    }
+
+    // HH:mm(:ss) -> HH:mm
     final v = _toHHMM(s);
     if (_hasValue(v)) return v;
     return null;
   }
+
 
   // Flex In duration can come as seconds/int or HH:mm(:ss)
   String? _graceToHHMM(dynamic raw) {
@@ -511,32 +529,26 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       if (asInt != null) secs = asInt;
     }
 
-    // If provided as seconds (int/num), convert to HH:mm or HH:mm:ss (keep seconds if any)
+    // If provided as seconds (int/num), convert to HH:mm (minutes only; ignore seconds)
     if (secs != null) {
       if (secs < 0) secs = 0;
       final h = (secs ~/ 3600).toString().padLeft(2, '0');
       final m = ((secs % 3600) ~/ 60).toString().padLeft(2, '0');
-      final s = (secs % 60);
-      if (s == 0) return '$h:$m';
-      final ss = s.toString().padLeft(2, '0');
-      return '$h:$m:$ss';
+      return '$h:$m';
     }
 
-    // Otherwise assume string HH:mm(:ss) and preserve seconds if any
-    final s = raw.toString().trim();
+    // Otherwise assume string HH:mm(:ss) or legacy HH.mm and return HH:mm (minutes only)
+    var s = raw.toString().trim();
     if (s.isEmpty || s.toLowerCase() == 'null') return null;
+
+    if (s.contains('.') && !s.contains(':') && RegExp(r'^\d{1,2}\.\d{1,2}(?:\.\d{1,2})?$').hasMatch(s)) {
+      s = s.replaceAll('.', ':');
+    }
 
     final parts = s.split(':');
     if (parts.length >= 2) {
       final hh = parts[0].padLeft(2, '0');
       final mm = parts[1].padLeft(2, '0');
-
-      if (parts.length >= 3) {
-        final secVal = int.tryParse(parts[2]) ?? 0;
-        if (secVal == 0) return '$hh:$mm';
-        final ss = secVal.toString().padLeft(2, '0');
-        return '$hh:$mm:$ss';
-      }
       return '$hh:$mm';
     }
 
@@ -600,27 +612,46 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 // Parse time or ISO datetime to DateTime, using attendanceDate as base if only HH:mm
   DateTime? _parseApiDateTime(String? raw, DateTime baseDate) {
     if (!_hasValue(raw)) return null;
-    final s = raw!.trim();
 
+    var s = raw!.trim();
+    if (s.isEmpty) return null;
+
+    // normalize legacy dot format "02.08" => "02:08"
+    if (!s.contains('T') && s.contains('.') && !s.contains(':') && RegExp(r'^\d{1,2}\.\d{1,2}(?:\.\d{1,2})?$').hasMatch(s)) {
+      s = s.replaceAll('.', ':');
+    }
+
+    // ISO datetime
     if (s.contains('T')) {
       try {
-        return DateTime.parse(s).toLocal();
+        final dt = DateTime.parse(s).toLocal();
+        // keep only minutes (seconds ignored for UI logic)
+        return DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute);
       } catch (_) {}
     }
 
+    // 12-hour (AM/PM)
+    if (RegExp(r'\b(am|pm)\b', caseSensitive: false).hasMatch(s)) {
+      try {
+        final t = DateFormat('hh:mm a').parseLoose(s);
+        return DateTime(baseDate.year, baseDate.month, baseDate.day, t.hour, t.minute);
+      } catch (_) {}
+      try {
+        final t = DateFormat('hh:mm:ss a').parseLoose(s);
+        return DateTime(baseDate.year, baseDate.month, baseDate.day, t.hour, t.minute);
+      } catch (_) {}
+    }
+
+    // HH:mm(:ss)
     final parts = s.split(':');
     if (parts.length < 2) return null;
 
     final hh = int.tryParse(parts[0]) ?? 0;
     final mm = int.tryParse(parts[1]) ?? 0;
 
-    int ss = 0;
-    if (parts.length >= 3) {
-      ss = int.tryParse(parts[2].split('.').first) ?? 0;
-    }
-
-    return DateTime(baseDate.year, baseDate.month, baseDate.day, hh, mm, ss);
+    return DateTime(baseDate.year, baseDate.month, baseDate.day, hh, mm);
   }
+
 
   DateTime _attendanceBaseDate(DateTime now) {
     // Prefer the resolved attendance date from API (yyyy-mm-dd).
@@ -884,7 +915,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final String? last =
     (data['last_check_out'] ?? data['clock_out_time'] ?? data['clock_out'])?.toString();
 
-    final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00:00').toString();
+    final String hours = (data['worked_hours'] ?? data['duration'] ?? '00:00').toString();
 
     // New fields
     final bool hasWorkedSec = data.containsKey('worked_seconds');
@@ -1079,18 +1110,28 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
       workHoursShortfall = _toHHMMFromAny(shortfallRaw);
 
-// Fallback compute shortfall/below-min when API doesn't provide it.
-      if (!isPresenceOnly && _hasWorkedSecondsFromApi) {
+      // Override "Short by" + "Below minimum" using minute-based punches (First/Last),
+      // so UI is consistent and never shows second-level jitter.
+      if (!isPresenceOnly) {
+        final base = _attendanceBaseDate(_hasServerTime ? DateTime.now().add(_serverOffset) : DateTime.now());
+
+        final inDt = _parseApiDateTime(firstCheckIn, base);
+        var outDt = _parseApiDateTime(lastCheckOut, base);
+
+        int workedMinFromPunches = 0;
+        if (inDt != null && outDt != null) {
+          if (outDt.isBefore(inDt)) outDt = outDt.add(const Duration(days: 1));
+          workedMinFromPunches = outDt.difference(inDt).inMinutes;
+          if (workedMinFromPunches < 0) workedMinFromPunches = 0;
+        }
+
         final reqMin = _requiredWorkMinutes();
         if (reqMin != null && reqMin > 0) {
-          final shortSec = (reqMin * 60) - workedSeconds;
-          final short = shortSec > 0 ? shortSec : 0;
-          if (!hasShortfallKey) {
-            workHoursShortfall = short > 0 ? _formatSecondsHHMM(short) : null;
-          }
-          if (!hasBelowMinKey) {
-            workHoursBelowMinimum = short > 0 && _hasValue(lastCheckOut);
-          }
+          final shortMin = (reqMin - workedMinFromPunches);
+          final short = shortMin > 0 ? shortMin : 0;
+
+          workHoursShortfall = short > 0 ? _minutesToHHMM(short) : null;
+          workHoursBelowMinimum = short > 0 && _hasValue(lastCheckOut);
         }
       }
 
@@ -1110,10 +1151,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 // ===== Work hours rendering =====
 
   String _computeWorkHoursStatic(DateTime now) {
-    if (_hasWorkedSecondsFromApi) {
-      return _formatSecondsHHMM(workedSeconds);
-    }
-
+    // Work Hours MUST follow the displayed punches (minute-based),
+    // not `worked_seconds` (which may include device-level seconds).
     final base = _attendanceBaseDate(now);
     final inDt = _parseApiDateTime(firstCheckIn, base);
     var outDt = _parseApiDateTime(lastCheckOut, base);
@@ -1121,16 +1160,17 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     if (missingCheckIn) {
       if (inDt == null || outDt == null) return '00:00';
       if (outDt.isBefore(inDt)) outDt = outDt.add(const Duration(days: 1));
-      final diff = outDt.difference(inDt);
-      return _formatDurationHHMM(diff.isNegative ? Duration.zero : diff);
+      final diffMin = outDt.difference(inDt).inMinutes;
+      return _minutesToHHMM(diffMin < 0 ? 0 : diffMin);
     }
 
     if (inDt != null && outDt != null) {
       if (outDt.isBefore(inDt)) outDt = outDt.add(const Duration(days: 1));
-      final diff = outDt.difference(inDt);
-      return _formatDurationHHMM(diff.isNegative ? Duration.zero : diff);
+      final diffMin = outDt.difference(inDt).inMinutes;
+      return _minutesToHHMM(diffMin < 0 ? 0 : diffMin);
     }
 
+    // Fallback to legacy server string (HH:mm)
     return _toHHMMOrDash(workedHours);
   }
 
@@ -1385,12 +1425,13 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     // Only meaningful after we have a check-in time.
     if (!_hasValue(firstCheckIn)) return false;
 
-    // Show only when it's actionable/needed:
+    // Show expected OUT when:
     // - still working, OR
-    // - already checked-out but work hours are still below minimum (so user knows what OUT time is expected).
+    // - already checked-in but not checked-out yet, OR
+    // - checked-out but below minimum (informational).
     if (isWorking) return true;
-
-    if (workHoursBelowMinimum && (serverCanUpdateClockOut || serverCanClockOut)) return true;
+    if (!_hasValue(lastCheckOut)) return true;
+    if (workHoursBelowMinimum) return true;
 
     return false;
   }
@@ -1415,7 +1456,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     // - When check-in happens *after* Flex In ends, expected out is capped at the latest flex start
     //   (shiftStart + flexDuration). This avoids extending expected out later just because the
     //   employee arrived late.
-    DateTime baseStart = inDt;
+    DateTime baseStart = DateTime(inDt.year, inDt.month, inDt.day, inDt.hour, inDt.minute);
     final flexLatest = _latestFlexStartDateTime(base);
     if (flexLatest != null && inDt.isAfter(flexLatest)) {
       baseStart = flexLatest;
@@ -1483,10 +1524,10 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
           ),
 
           if (expectedOut != null) ...[
-            const SizedBox(height: 10),
-            Text(
-              'Expected Check Out : $expectedOut',
-              style: TextStyle(fontSize: 12, color: Colors.grey.shade700, fontWeight: FontWeight.w600),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: _infoChipKV('Earliest Check Out', expectedOut),
             ),
           ],
         ],
@@ -1507,6 +1548,36 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  Widget _infoChipKV(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          ),
+        ],
       ),
     );
   }
@@ -1920,7 +1991,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
               children: [
                 Text('Attendance',
                     style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
-                Text('00:00:00', style: TextStyle(color: Colors.white)),
+                Text('00:00', style: TextStyle(color: Colors.white)),
               ],
             ),
           ),
@@ -1970,8 +2041,8 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     }
 
     final dateLabel = DateFormat('EEE, d MMM yyyy').format(parsedDate ?? DateTime.now());
-    final checkInText = firstCheckIn ?? '-';
-    final checkOutText = lastCheckOut ?? '-';
+    final checkInText = _toHHMMFromAny(firstCheckIn) ?? '-';
+    final checkOutText = _toHHMMFromAny(lastCheckOut) ?? '-';
     final note = _statusNote().trim();
 
     return Container(
@@ -2017,12 +2088,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
             Row(
               children: [
                 _headerStat(
-                  label: 'First Check-In',
+                  label: 'First Check In',
                   value: Text(checkInText,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
                 ),
                 _headerStat(
-                  label: 'Last Check-Out',
+                  label: 'Last Check Out',
                   value: Text(checkOutText,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18)),
                 ),
