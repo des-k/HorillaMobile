@@ -498,9 +498,9 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Check-in Cut-off Passed'),
+        title: const Text('Check In Cutoff Passed'),
         content: Text(
-          '$errorMessage\n\nYou can still record a check-out now (it will be marked as Missing Check-In).',
+          '$errorMessage\n\nYou can still record a check-out now (it will be marked as Missing Check In).',
         ),
         actions: [
           TextButton(
@@ -552,7 +552,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
                 );
               }
             },
-            child: const Text('Proceed to Check-Out'),
+            child: const Text('Proceed to Check Out'),
           ),
         ],
       ),
@@ -583,7 +583,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Check-in Failed'),
+        title: const Text('Check In Failed'),
         content: Text(errorMessage),
         actions: [
           TextButton(
