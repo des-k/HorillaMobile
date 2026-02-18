@@ -1083,22 +1083,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                   color: Colors.black,
                 ),
                 onPressed: () async {
-                  var faceDetection = await getFaceDetection();
+                  await enableFaceDetection();
                   var geoFencingResponse = await getGeoFence();
                   final prefs = await SharedPreferences.getInstance();
 
                   bool geoFencingSetupExists = geoFencingResponse != null;
                   bool geoFencingEnabled = geoFencingSetupExists ? geoFencingResponse : false;
 
-                  prefs.remove('face_detection');
-                  prefs.setBool("face_detection", faceDetection);
-                  prefs.remove('geo_fencing');
-                  prefs.setBool("geo_fencing", geoFencingEnabled);
+                  await prefs.setBool("face_detection", true);
+                  await prefs.setBool("geo_fencing", geoFencingEnabled);
 
                   showDialog(
                     context: context,
                     builder: (context) {
-                      bool tempFaceDetection = faceDetection;
                       bool tempGeofencing = geoFencingEnabled;
                       bool isGeofencingSetup = geoFencingSetupExists;
 
@@ -1109,21 +1106,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                             content: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                SwitchListTile(
-                                  title: const Text('Face Detection'),
-                                  value: tempFaceDetection,
-                                  onChanged: (val) {
-                                    setState(() {
-                                      tempFaceDetection = val;
-                                    });
-                                    // Immediately apply face detection changes
-                                    if (val) {
-                                      enableFaceDetection();
-                                    } else {
-                                      disableFaceDetection();
-                                    }
-                                  },
-                                ),
                                 SwitchListTile(
                                   title: const Text('Geofencing'),
                                   value: tempGeofencing,
@@ -1162,7 +1144,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                               TextButton(
                                 onPressed: () async {
                                   final prefs = await SharedPreferences.getInstance();
-                                  await prefs.setBool("face_detection", tempFaceDetection);
+                                  await prefs.setBool("face_detection", true);
                                   await prefs.setBool("geo_fencing", tempGeofencing);
 
                                   setState(() {
