@@ -12,6 +12,7 @@ import 'dart:io';
 
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
@@ -20,7 +21,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shimmer/shimmer.dart';
-
+import 'package:url_launcher/url_launcher.dart';
 import 'face_detection.dart';
 
 class CheckInCheckOutFormPage extends StatefulWidget {
@@ -36,6 +37,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   bool _isProcessingDrag = false;
   bool _locationSnackBarShown = false;
   bool _locationUnavailableSnackBarShown = false;
+
+  // Approver-only managers (reporting managers) use a different attendance system.
+  // Backend returns `attendance_enabled=false` for them.
+  bool attendanceEnabled = true;
+  String? attendanceDisabledMessage;
 
   // API / user
   late String baseUrl = '';
@@ -105,6 +111,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String inMode = 'WFO';
   String outMode = 'WFO';
 
+  // Attendance validity per punch (Option B; nullable when not provided by backend)
+  String? inAttendanceStatus; // VALID / REJECTED
+  String? outAttendanceStatus; // VALID / REJECTED
+  String? inAttendanceRejectReasonCode;
+  String? outAttendanceRejectReasonCode;
+
 
   // Work-mode request status for IN/OUT (optional, provided by backend)
   // Examples: \"pending\", \"approved\"
@@ -161,6 +173,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     final up = v.toUpperCase();
     if (up.contains('APPROV')) return 'APPROVED';
+    if (up.contains('WAIT')) return 'WAITING';
     if (up.contains('PEND')) return 'PENDING';
     if (up.contains('REJECT')) return 'REJECTED';
     if (up.contains('CANCEL')) return 'CANCELED';
@@ -170,10 +183,22 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   String _displayReqStatus(String status) {
     final s = status.trim().toUpperCase();
     if (s == 'APPROVED') return 'Approved';
+    if (s == 'WAITING') return 'Waiting';
     if (s == 'PENDING') return 'Pending';
     if (s == 'REJECTED') return 'Rejected';
     if (s == 'CANCELED') return 'Canceled';
+    if (s == 'VALID') return 'Valid';
     return s.substring(0, 1) + s.substring(1).toLowerCase();
+  }
+
+  String? _normPunchStatus(String? s) {
+    if (s == null) return null;
+    final v = s.toString().trim();
+    if (v.isEmpty) return null;
+    final up = v.toUpperCase();
+    if (up.contains('VALID')) return 'VALID';
+    if (up.contains('REJECT')) return 'REJECTED';
+    return up;
   }
 
   bool get _isBothWfo => _normMode(inMode) == 'WFO' && _normMode(outMode) == 'WFO';
@@ -241,6 +266,32 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('token');
     setState(() => getToken = token ?? '');
+  }
+
+  Future<void> _openMaps(String? location) async {
+    if (location == null) return;
+    final s = location.trim();
+    if (s.isEmpty) return;
+
+    Uri uri;
+
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      uri = Uri.parse(s);
+    } else {
+      // Coba parse "lat,lng"
+      final m = RegExp(r'^\s*(-?\d+(\.\d+)?)\s*,\s*(-?\d+(\.\d+)?)\s*$')
+          .firstMatch(s);
+      final query = m != null
+          ? '${m.group(1)},${m.group(3)}'
+          : Uri.encodeComponent(s);
+
+      uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=$query');
+    }
+
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok) {
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
+    }
   }
 
   Future<void> _ensureFaceDetectionAlwaysOn() async {
@@ -824,19 +875,34 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     return 'https://www.google.com/maps/search/?api=1&query=$q';
   }
 
-  void _showMapLinkDialog(String title, String latLng) {
-    final url = _googleMapsUrlFromLatLng(latLng);
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: SelectableText(url),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
-        ],
+  Future<void> _openMapLink(String title, String latLng) async {
+    final urlStr = _googleMapsUrlFromLatLng(latLng);
+    final uri = Uri.parse(urlStr);
+
+    // Try opening Google Maps / browser directly (no dialog).
+    final okExternal = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (okExternal) return;
+
+    final okDefault = await launchUrl(uri, mode: LaunchMode.platformDefault);
+    if (okDefault) return;
+
+    // Final fallback: show a SnackBar with copy action (no modal dialog).
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Unable to open Maps. Link copied to clipboard.'),
+        action: SnackBarAction(
+          label: 'COPY',
+          onPressed: () async {
+            await Clipboard.setData(ClipboardData(text: urlStr));
+          },
+        ),
       ),
     );
+
+    await Clipboard.setData(ClipboardData(text: urlStr));
   }
+
 
 // ===== refresh status =====
 
@@ -862,6 +928,18 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     }
 
     final data = jsonDecode(response.body);
+
+    // "Approver-only" managers: backend may return attendance_enabled=false.
+    final bool enabledFromApi =
+        (data['attendance_enabled'] ?? data['attendanceEnabled'] ?? data['is_attendance_enabled'] ?? true) == true;
+    final String? disabledMsgFromApi = !enabledFromApi
+        ? (data['attendance_disabled_reason'] ??
+        data['attendance_disabled_message'] ??
+        data['disabled_reason'] ??
+        data['detail'] ??
+        data['message'])
+        ?.toString()
+        : null;
 
     // server time offset
     bool hasServerTime = false;
@@ -966,9 +1044,15 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
     // Work modes
     final String inModeRaw =
-    (data['in_mode'] ?? data['check_in_mode'] ?? data['clock_in_mode'] ?? 'WFO').toString();
+    (data['in_work_type'] ?? data['in_mode'] ?? data['check_in_mode'] ?? data['clock_in_mode'] ?? 'WFO').toString();
     final String outModeRaw =
-    (data['out_mode'] ?? data['check_out_mode'] ?? data['clock_out_mode'] ?? 'WFO').toString();
+    (data['out_work_type'] ?? data['out_mode'] ?? data['check_out_mode'] ?? data['clock_out_mode'] ?? 'WFO').toString();
+
+    // Option B: punch validity (may be null)
+    final String? inAttStatusRaw = data['in_attendance_status']?.toString();
+    final String? outAttStatusRaw = data['out_attendance_status']?.toString();
+    final String? inRejectRaw = data['in_attendance_reject_reason_code']?.toString();
+    final String? outRejectRaw = data['out_attendance_reject_reason_code']?.toString();
 
     // Presence-only hint (On Duty)
     final bool hasPresenceKey = data.containsKey('is_presensi_only') ||
@@ -987,16 +1071,20 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       return null;
     }
 
-    final String? inReqStatusRaw = (data['in_request_status'] ??
+    final String? inReqStatusRaw = (data['in_work_type_request_status'] ??
+        data['in_request_status'] ??
         data['check_in_request_status'] ??
+        _statusFrom(data['in_work_type_request']) ??
         _statusFrom(data['in_request']) ??
         _statusFrom(data['work_mode_request_in']) ??
         _statusFrom(data['work_mode_request']) ??
         '')
         .toString();
 
-    final String? outReqStatusRaw = (data['out_request_status'] ??
+    final String? outReqStatusRaw = (data['out_work_type_request_status'] ??
+        data['out_request_status'] ??
         data['check_out_request_status'] ??
+        _statusFrom(data['out_work_type_request']) ??
         _statusFrom(data['out_request']) ??
         _statusFrom(data['work_mode_request_out']) ??
         _statusFrom(data['work_mode_request']) ??
@@ -1051,17 +1139,21 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         : statusFlag;
 
     setState(() {
+      attendanceEnabled = enabledFromApi;
+      attendanceDisabledMessage = disabledMsgFromApi;
+
       isCurrentlyCheckedIn = finalIsWorking;
 
       checkInCutoffPassed = cutoffPassed;
-      serverCanClockIn = canClockIn;
-      serverCanClockOut = canClockOut;
-      serverCanUpdateClockOut = canUpdateOut;
+      // If attendance is disabled for this user, hide punch actions.
+      serverCanClockIn = enabledFromApi ? canClockIn : false;
+      serverCanClockOut = enabledFromApi ? canClockOut : false;
+      serverCanUpdateClockOut = enabledFromApi ? canUpdateOut : false;
 
-      requiresPhotoIn = reqPhotoInFromApi;
-      requiresPhotoOut = reqPhotoOutFromApi;
-      requiresLocationIn = reqLocInFromApi;
-      requiresLocationOut = reqLocOutFromApi;
+      requiresPhotoIn = enabledFromApi ? reqPhotoInFromApi : false;
+      requiresPhotoOut = enabledFromApi ? reqPhotoOutFromApi : false;
+      requiresLocationIn = enabledFromApi ? reqLocInFromApi : false;
+      requiresLocationOut = enabledFromApi ? reqLocOutFromApi : false;
 
       hasAttendance = hasAttendanceFlag ||
           ((first ?? '').trim().isNotEmpty) ||
@@ -1104,6 +1196,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
 
       inRequestStatus = _normReqStatus(inReqStatusRaw);
       outRequestStatus = _normReqStatus(outReqStatusRaw);
+
+      inAttendanceStatus = _normPunchStatus(inAttStatusRaw);
+      outAttendanceStatus = _normPunchStatus(outAttStatusRaw);
+      inAttendanceRejectReasonCode = (inRejectRaw == null || inRejectRaw.trim().isEmpty) ? null : inRejectRaw.trim();
+      outAttendanceRejectReasonCode = (outRejectRaw == null || outRejectRaw.trim().isEmpty) ? null : outRejectRaw.trim();
 
       inMode = _normMode(inModeRaw);
       outMode = _normMode(outModeRaw);
@@ -1271,27 +1368,43 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
           ),
         ),
         const SizedBox(height: 6),
-        if (_hasValue(location))
-          Row(
+        // Keep a consistent height so IN/OUT tiles stay aligned even if one side has no location.
+        SizedBox(
+          height: 26,
+          child: _hasValue(location)
+              ? Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Flexible(
+              const Icon(Icons.location_on_outlined, size: 14),
+              const SizedBox(width: 4),
+              Expanded(
                 child: Text(
                   location!,
                   style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
                   overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                 ),
               ),
               const SizedBox(width: 6),
               InkWell(
-                onTap: () => _showMapLinkDialog(label, location),
-                child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  child: Text('Map', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                onTap: () => _openMapLink(label, location!),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: Text(
+                    'Open Maps',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      decoration: TextDecoration.underline,
+                      color: Colors.blue.shade700,
+                    ),
+                  ),
                 ),
               ),
             ],
-          ),
+          )
+              : const SizedBox.shrink(),
+        ),
       ],
     );
   }
@@ -1305,6 +1418,12 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     if (s == 'APPROVED') {
       bg = Colors.green.shade100;
       fg = Colors.green.shade800;
+    } else if (s == 'VALID') {
+      bg = Colors.green.shade100;
+      fg = Colors.green.shade800;
+    } else if (s == 'WAITING') {
+      bg = Colors.amber.shade100;
+      fg = Colors.brown.shade800;
     } else if (s == 'PENDING') {
       bg = Colors.amber.shade100;
       fg = Colors.brown.shade800;
@@ -1329,8 +1448,9 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     );
   }
 
-  Widget _modeChip(String text, {String? status}) {
-    final st = _normReqStatus(status);
+  Widget _modeChip(String text, {String? requestStatus, String? punchStatus}) {
+    final rs = _normReqStatus(requestStatus);
+    final ps = _normPunchStatus(punchStatus);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -1341,9 +1461,13 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(text, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-          if (st != null) ...[
+          if (rs != null) ...[
             const SizedBox(width: 8),
-            _statusBadge(st),
+            _statusBadge(rs),
+          ],
+          if (ps != null) ...[
+            const SizedBox(width: 8),
+            _statusBadge(ps),
           ],
         ],
       ),
@@ -1351,20 +1475,38 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
   }
 
   Widget _buildModeRow() {
-    final inText = 'IN: ${_modeDisplay(inMode)}';
-    final outText = 'OUT: ${_modeDisplay(outMode)}';
+    final inText = 'Work Type IN: ${_modeDisplay(inMode)}';
+    final outText = 'Work Type OUT: ${_modeDisplay(outMode)}';
 
-    // Only show request status badges for request-based modes (WFA / ON Duty).
-    final inStatus = (_normMode(inMode) == 'WFO') ? null : inRequestStatus;
-    final outStatus = (_normMode(outMode) == 'WFO') ? null : outRequestStatus;
+    // Only show request status badges for request-based types (WFA / ON DUTY).
+    final inReq = (_normMode(inMode) == 'WFO') ? null : inRequestStatus;
+    final outReq = (_normMode(outMode) == 'WFO') ? null : outRequestStatus;
 
-    return Wrap(
+    final chips = Wrap(
       alignment: WrapAlignment.start,
       spacing: 8,
       runSpacing: 8,
       children: [
-        _modeChip(inText, status: inStatus),
-        _modeChip(outText, status: outStatus),
+        _modeChip(inText, requestStatus: inReq, punchStatus: inAttendanceStatus),
+        _modeChip(outText, requestStatus: outReq, punchStatus: outAttendanceStatus),
+      ],
+    );
+
+    final List<Widget> rejects = [];
+    if (inAttendanceStatus == 'REJECTED' && _hasValue(inAttendanceRejectReasonCode)) {
+      rejects.add(Text('IN rejected: ${inAttendanceRejectReasonCode!}', style: TextStyle(fontSize: 12, color: Colors.red.shade700)));
+    }
+    if (outAttendanceStatus == 'REJECTED' && _hasValue(outAttendanceRejectReasonCode)) {
+      rejects.add(Text('OUT rejected: ${outAttendanceRejectReasonCode!}', style: TextStyle(fontSize: 12, color: Colors.red.shade700)));
+    }
+
+    if (rejects.isEmpty) return chips;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        chips,
+        const SizedBox(height: 6),
+        ...rejects,
       ],
     );
   }
@@ -2159,12 +2301,13 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
       if (tiles.length == 1) {
         proofWidget = Padding(
           padding: const EdgeInsets.only(top: 12.0),
-          child: Row(children: [tiles.first]),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [tiles.first]),
         );
       } else {
         proofWidget = Padding(
           padding: const EdgeInsets.only(top: 12.0),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               tiles[0],
               const SizedBox(width: 12),
@@ -2263,6 +2406,53 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
     );
   }
 
+  Widget _buildApproverOnlyBanner() {
+    final msg = attendanceDisabledMessage?.trim();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+      child: Container(
+        padding: const EdgeInsets.all(12.0),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(10.0),
+          color: Colors.blueGrey.shade50,
+          border: Border.all(color: Colors.blueGrey.shade100),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.info_outline, color: Colors.blueGrey),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Approver-only',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    (msg == null || msg.isEmpty)
+                        ? 'Attendance (Check-In/Check-Out) is disabled for your account. You can still approve requests.'
+                        : msg,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pushNamed(context, '/attendance_request');
+                    },
+                    child: const Text('Go to Requests'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildSwipeAction() {
     if (!canCheckIn && !canCheckOut) return const SizedBox.shrink();
 
@@ -2341,7 +2531,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> {
         SizedBox(height: MediaQuery.of(context).size.height * 0.02),
         _buildEmployeeCard(),
         SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        _buildSwipeAction(),
+        attendanceEnabled ? _buildSwipeAction() : _buildApproverOnlyBanner(),
       ],
     );
   }
