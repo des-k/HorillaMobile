@@ -19,6 +19,7 @@ class AttendanceRequest extends StatefulWidget {
 
 class _AttendanceRequest extends State<AttendanceRequest>
     with SingleTickerProviderStateMixin {
+  late final TabController _tabController;
   Map<String, String> employeeIdMap = {};
   Map<String, String> shiftIdMap = {};
   Map<String, String> workTypeIdMap = {};
@@ -101,6 +102,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     prefetchData();
     _requestedScrollController.addListener(_requestedScrollListener);
     _allAttendanceScrollController.addListener(_allAttendanceScrollListener);
@@ -145,6 +147,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
 
   @override
   void dispose() {
+    _tabController.dispose();
     _requestedScrollController.removeListener(_requestedScrollListener);
     _requestedScrollController.dispose();
     _allAttendanceScrollController.removeListener(_allAttendanceScrollListener);
@@ -518,12 +521,11 @@ class _AttendanceRequest extends State<AttendanceRequest>
               ),
               ListTile(
                 leading: const Icon(Icons.work_outline, color: Colors.red),
-                title: const Text('Work Mode Request'),
-                subtitle: const Text('WFA / On Duty (approval workflow)'),
+                title: const Text('Work Type Request'),
+                subtitle: const Text('WFA / ON DUTY (approval workflow)'),
                 onTap: () async {
-                  // Ensure the Work Mode tab is built before calling its dialog.
-                  final tab = DefaultTabController.of(context);
-                  tab?.animateTo(1);
+                  // Switch to Work Type Requests tab, then open the create dialog.
+                  _tabController.animateTo(1);
                   Navigator.of(ctx).pop();
                   WidgetsBinding.instance.addPostFrameCallback((_) async {
                     await _workModeKey.currentState?.openCreateDialog();
@@ -1580,7 +1582,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
     // Preferred: unified permission check for admin + supervisor.
     // You will add this endpoint on backend.
     final preferred = await _tryCheck(
-        '$typedServerUrl/api/attendance/attendance-request-approve-perm-check/');
+        '$typedServerUrl/api/attendance/permission-check/attendance-request-approve');
     if (preferred != null) {
       canApprove = preferred;
     } else {
@@ -1657,7 +1659,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
 
     // Preferred: admin + supervisor
     final preferred = await _tryCheck(
-        '$typedServerUrl/api/attendance/attendance-request-approve-perm-check/');
+        '$typedServerUrl/api/attendance/permission-check/attendance-request-approve');
     if (preferred != null) {
       canApprove = preferred;
     } else {
@@ -1862,185 +1864,183 @@ class _AttendanceRequest extends State<AttendanceRequest>
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
+    return Scaffold(
+      backgroundColor: Colors.white,
+      key: _scaffoldKey,
+      appBar: AppBar(
         backgroundColor: Colors.white,
-        key: _scaffoldKey,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          leading: IconButton(
-            icon: const Icon(Icons.menu), // Menu icon
-            onPressed: () {
-              _scaffoldKey.currentState?.openDrawer();
-            },
-          ),
-          title: const Text(
-            'Requests',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Container(
-                    alignment: Alignment.centerRight,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        showCreateRequestBottomSheet(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(75, 50),
-                        backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(4.0),
-                          side: const BorderSide(color: Colors.red),
-                        ),
-                      ),
-                      child: const Text('CREATE',
-                          style: TextStyle(color: Colors.red)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+        leading: IconButton(
+          icon: const Icon(Icons.menu), // Menu icon
+          onPressed: () {
+            _scaffoldKey.currentState?.openDrawer();
+          },
         ),
-        body: isLoading ? _buildLoadingWidget() : _buildEmployeeDetailsWidget(),
-        drawer: Drawer(
-          child: ListView(
-            padding: const EdgeInsets.all(0),
-            children: [
-              DrawerHeader(
-                decoration: const BoxDecoration(),
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: SizedBox(
-                    width: 80,
-                    height: 80,
-                    child: Image.asset('Assets/horilla-logo.png'),
+        title: const Text(
+          'Requests',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Container(
+                  alignment: Alignment.centerRight,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      final tabCtx = _scaffoldKey.currentContext ?? context;
+                      showCreateRequestBottomSheet(tabCtx);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(75, 50),
+                      backgroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(4.0),
+                        side: const BorderSide(color: Colors.red),
+                      ),
+                    ),
+                    child: const Text('CREATE',
+                        style: TextStyle(color: Colors.red)),
                   ),
                 ),
-              ),
-              _isPermissionCheckComplete
-                  ? Column(
-                children: [
-                  // Only "Overview" has a permission check
-                  _drawerPermissionOverview
-                      ? ListTile(
-                    title: const Text('Overview'),
-                    onTap: () {
-                      Navigator.pushNamed(
-                          context, '/attendance_overview');
-                    },
-                  )
-                      : const SizedBox.shrink(),
-
-                  // All other menu items are always visible
-                  ListTile(
-                    title: const Text('Attendance'),
-                    onTap: () {
-                      Navigator.pushNamed(
-                          context, '/attendance_attendance');
-                    },
-                  ),
-                  ListTile(
-                    title: const Text('Requests'),
-                    onTap: () {
-                      Navigator.pushNamed(context, '/attendance_request');
-                    },
-                  ),
-                  ListTile(
-                    title: const Text('Hour Account'),
-                    onTap: () {
-                      Navigator.pushNamed(
-                          context, '/employee_hour_account');
-                    },
-                  ),
-                ],
-              )
-                  : Column(
-                // Loading state (shimmer effect)
-                children: [
-                  shimmerListTile(),
-                  shimmerListTile(),
-                  shimmerListTile(),
-                  shimmerListTile(),
-                ],
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-        bottomNavigationBar: (bottomBarPages.length <= maxCount)
-            ? AnimatedNotchBottomBar(
-          /// Provide NotchBottomBarController
-          notchBottomBarController: _controller,
-          color: Colors.red,
-          showLabel: true,
-          notchColor: Colors.red,
-          kBottomRadius: 28.0,
-          kIconSize: 24.0,
+        ],
+      ),
+      body: isLoading ? _buildLoadingWidget() : _buildEmployeeDetailsWidget(),
+      drawer: Drawer(
+        child: ListView(
+          padding: const EdgeInsets.all(0),
+          children: [
+            DrawerHeader(
+              decoration: const BoxDecoration(),
+              child: FittedBox(
+                fit: BoxFit.contain,
+                child: SizedBox(
+                  width: 80,
+                  height: 80,
+                  child: Image.asset('Assets/horilla-logo.png'),
+                ),
+              ),
+            ),
+            _isPermissionCheckComplete
+                ? Column(
+              children: [
+                // Only "Overview" has a permission check
+                _drawerPermissionOverview
+                    ? ListTile(
+                  title: const Text('Overview'),
+                  onTap: () {
+                    Navigator.pushNamed(
+                        context, '/attendance_overview');
+                  },
+                )
+                    : const SizedBox.shrink(),
 
-          /// restart app if you change removeMargins
-          removeMargins: false,
-          bottomBarWidth: MediaQuery.of(context).size.width * 1,
-          durationInMilliSeconds: 300,
-          bottomBarItems: const [
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.home_filled,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.home_filled,
-                color: Colors.white,
-              ),
-              // itemLabel: 'Home',
-            ),
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.update_outlined,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.update_outlined,
-                color: Colors.white,
-              ),
-            ),
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.person,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.person,
-                color: Colors.white,
-              ),
+                // All other menu items are always visible
+                ListTile(
+                  title: const Text('Attendance'),
+                  onTap: () {
+                    Navigator.pushNamed(
+                        context, '/attendance_attendance');
+                  },
+                ),
+                ListTile(
+                  title: const Text('Requests'),
+                  onTap: () {
+                    Navigator.pushNamed(context, '/attendance_request');
+                  },
+                ),
+                ListTile(
+                  title: const Text('Hour Account'),
+                  onTap: () {
+                    Navigator.pushNamed(
+                        context, '/employee_hour_account');
+                  },
+                ),
+              ],
+            )
+                : Column(
+              // Loading state (shimmer effect)
+              children: [
+                shimmerListTile(),
+                shimmerListTile(),
+                shimmerListTile(),
+                shimmerListTile(),
+              ],
             ),
           ],
-
-          onTap: (index) async {
-            switch (index) {
-              case 0:
-                Navigator.pushNamed(context, '/home');
-                break;
-              case 1:
-                Navigator.pushNamed(
-                    context, '/employee_checkin_checkout');
-                break;
-              case 2:
-                Navigator.pushNamed(context, '/employees_form',
-                    arguments: arguments);
-                break;
-            }
-          },
-        )
-            : null,
+        ),
       ),
+      bottomNavigationBar: (bottomBarPages.length <= maxCount)
+          ? AnimatedNotchBottomBar(
+        /// Provide NotchBottomBarController
+        notchBottomBarController: _controller,
+        color: Colors.red,
+        showLabel: true,
+        notchColor: Colors.red,
+        kBottomRadius: 28.0,
+        kIconSize: 24.0,
+
+        /// restart app if you change removeMargins
+        removeMargins: false,
+        bottomBarWidth: MediaQuery.of(context).size.width * 1,
+        durationInMilliSeconds: 300,
+        bottomBarItems: const [
+          BottomBarItem(
+            inActiveItem: Icon(
+              Icons.home_filled,
+              color: Colors.white,
+            ),
+            activeItem: Icon(
+              Icons.home_filled,
+              color: Colors.white,
+            ),
+            // itemLabel: 'Home',
+          ),
+          BottomBarItem(
+            inActiveItem: Icon(
+              Icons.update_outlined,
+              color: Colors.white,
+            ),
+            activeItem: Icon(
+              Icons.update_outlined,
+              color: Colors.white,
+            ),
+          ),
+          BottomBarItem(
+            inActiveItem: Icon(
+              Icons.person,
+              color: Colors.white,
+            ),
+            activeItem: Icon(
+              Icons.person,
+              color: Colors.white,
+            ),
+          ),
+        ],
+
+        onTap: (index) async {
+          switch (index) {
+            case 0:
+              Navigator.pushNamed(context, '/home');
+              break;
+            case 1:
+              Navigator.pushNamed(
+                  context, '/employee_checkin_checkout');
+              break;
+            case 2:
+              Navigator.pushNamed(context, '/employees_form',
+                  arguments: arguments);
+              break;
+          }
+        },
+      )
+          : null,
     );
   }
 
@@ -2096,6 +2096,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
         ),
         SizedBox(height: MediaQuery.of(context).size.height * 0.02),
         TabBar(
+          controller: _tabController,
           labelColor: Colors.red,
           indicatorColor: Colors.red,
           unselectedLabelColor: Colors.grey,
@@ -2105,7 +2106,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
               text: 'Attendance Requests ($allRequestAttendance)',
             ),
             Tab(
-              text: 'Work Mode Requests ($workModeRequestCount)',
+              text: 'Work Type Requests ($workModeRequestCount)',
             ),
             Tab(
               text: 'All Attendances ($myRequestAttendance)',
@@ -2115,6 +2116,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
         SizedBox(height: MediaQuery.of(context).size.height * 0.03),
         Expanded(
           child: TabBarView(
+            controller: _tabController,
             children: [
               buildRequestedLoadingAttendanceContent(
                   requestsAllRequestedAttendances,
@@ -2202,6 +2204,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
             ),
             SizedBox(height: MediaQuery.of(context).size.height * 0.02),
             TabBar(
+              controller: _tabController,
               indicatorColor: Colors.red,
               labelColor: Colors.red,
               unselectedLabelColor: Colors.grey,
@@ -2211,7 +2214,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
                   text: 'Attendance Requests ($allRequestAttendance)',
                 ),
                 Tab(
-                  text: 'Work Mode Requests ($workModeRequestCount)',
+                  text: 'Work Type Requests ($workModeRequestCount)',
                 ),
                 Tab(
                   text: 'All Attendances ($myRequestAttendance)',
@@ -2221,6 +2224,7 @@ class _AttendanceRequest extends State<AttendanceRequest>
             SizedBox(height: MediaQuery.of(context).size.height * 0.01),
             Expanded(
               child: TabBarView(
+                controller: _tabController,
                 children: [
                   allRequestAttendance == 0
                       ? Center(
