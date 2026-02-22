@@ -2,11 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Work Mode Requests (WFA / ON_DUTY)
+/// Work Type Requests (WFA / ON_DUTY)
 /// - My Requests: employee creates & can cancel while pending
 /// - Approvals: manager/admin can approve/reject
 ///
@@ -38,6 +39,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
 
   int? _currentEmployeeId;
   bool _canApprove = false;
+  List<PlatformFile> _pickedFiles = [];
 
   String get _baseUrl => _cachedBaseUrl ?? '';
   String? _cachedBaseUrl;
@@ -74,7 +76,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
       final token = prefs.getString('token');
       final typedServerUrl = prefs.getString('typed_url');
       final uri = Uri.parse(
-          '$typedServerUrl/api/attendance/work-mode-request-approve-perm-check/');
+          '$typedServerUrl/api/attendance/permission-check/work-type-request-approve');
       final resp = await http.get(uri, headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $token',
@@ -138,7 +140,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
 
     final search = (widget.searchText).trim();
     final uri = Uri.parse(
-        '$typedServerUrl/api/attendance/work-mode-request/?page=$page&search=$search');
+        '$typedServerUrl/api/attendance/work-type-request/?page=$page&search=$search');
 
     final resp = await http.get(uri, headers: {
       'Content-Type': 'application/json',
@@ -182,17 +184,23 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
 
   List<Map<String, dynamic>> get _approvalQueue {
     if (_currentEmployeeId == null) return [];
-    return _all.where((r) => '${r['employee_id']}' != '$_currentEmployeeId').toList();
+    // Approvals should only show WAITING_FOR_APPROVAL per spec.
+    return _all
+        .where((r) => _statusText(r) == 'WAITING')
+        .where((r) => '${r['employee_id']}' != '$_currentEmployeeId')
+        .toList();
   }
 
   String _statusText(Map<String, dynamic> r) {
     final raw = (r['status'] ?? '').toString();
     if (raw.isEmpty) return '-';
-    return raw.toUpperCase();
+    final up = raw.toUpperCase();
+    if (up.contains('WAIT')) return 'WAITING';
+    return up;
   }
 
   String _modeText(Map<String, dynamic> r) {
-    final raw = (r['work_mode'] ?? '').toString().toLowerCase();
+    final raw = (r['work_type'] ?? r['mode'] ?? r['work_mode'] ?? '').toString().toLowerCase();
     if (raw == 'wfa') return 'WFA';
     if (raw == 'on_duty') return 'ON DUTY';
     return raw.isEmpty ? '-' : raw;
@@ -225,6 +233,8 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     switch (status) {
       case 'APPROVED':
         return Colors.green;
+      case 'WAITING':
+        return Colors.orange;
       case 'REJECTED':
         return Colors.red;
       case 'CANCELED':
@@ -277,12 +287,15 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
-                    'Create Work Mode Request',
+                    'Create Work Type Request',
                     style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
                   ),
                   IconButton(
                     icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(ctx).pop(),
+                    onPressed: () {
+                      setState(() => _pickedFiles = []);
+                      Navigator.of(ctx).pop();
+                    },
                   ),
                 ],
               ),
@@ -293,84 +306,106 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const SizedBox(height: 8),
-                      const Text('Work Mode', style: TextStyle(color: Colors.black)),
+                      const Text('Work Type', style: TextStyle(color: Colors.black)),
                       const SizedBox(height: 6),
                       DropdownButtonFormField<String>(
                         value: workMode,
                         items: const [
                           DropdownMenuItem(value: 'wfa', child: Text('WFA (Needs approval before punch)')),
-                          DropdownMenuItem(value: 'on_duty', child: Text('On Duty (Punch allowed while pending)')),
+                          DropdownMenuItem(value: 'on_duty', child: Text('ON DUTY (Punch allowed while pending)')),
                         ],
                         onChanged: (v) {
                           if (v == null) return;
                           setStateDialog(() {
                             workMode = v;
-                            if (workMode == 'wfa') {
-                              scope = 'full';
-                            }
+                            // Keep scope as selected; backend will enforce allowed combinations.
+                            if (scope != 'full') endDate = startDate;
                           });
                         },
                         decoration: const InputDecoration(border: OutlineInputBorder()),
                       ),
                       const SizedBox(height: 12),
-                      if (workMode == 'on_duty') ...[
-                        const Text('On Duty Type', style: TextStyle(color: Colors.black)),
-                        const SizedBox(height: 6),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            ChoiceChip(
-                              label: const Text('IN'),
-                              selected: scope == 'in',
-                              onSelected: (_) => setStateDialog(() => scope = 'in'),
-                            ),
-                            ChoiceChip(
-                              label: const Text('OUT'),
-                              selected: scope == 'out',
-                              onSelected: (_) => setStateDialog(() => scope = 'out'),
-                            ),
-                            ChoiceChip(
-                              label: const Text('FULL'),
-                              selected: scope == 'full',
-                              onSelected: (_) => setStateDialog(() => scope = 'full'),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                      ],
-                      const Text('Date Range', style: TextStyle(color: Colors.black)),
+                      const Text('Scope', style: TextStyle(color: Colors.black)),
                       const SizedBox(height: 6),
-                      Row(
+                      Wrap(
+                        spacing: 8,
                         children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () async {
-                                final s = await pickDate(startDate);
-                                if (s == null) return;
-                                setStateDialog(() {
-                                  startDate = DateTime.parse(s);
-                                  if (endDate.isBefore(startDate)) endDate = startDate;
-                                });
-                              },
-                              child: Text('Start: ${DateFormat('yyyy-MM-dd').format(startDate)}'),
-                            ),
+                          ChoiceChip(
+                            label: const Text('IN'),
+                            selected: scope == 'in',
+                            onSelected: (_) => setStateDialog(() {
+                              scope = 'in';
+                              endDate = startDate;
+                            }),
                           ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: () async {
-                                final s = await pickDate(endDate);
-                                if (s == null) return;
-                                setStateDialog(() {
-                                  endDate = DateTime.parse(s);
-                                  if (endDate.isBefore(startDate)) endDate = startDate;
-                                });
-                              },
-                              child: Text('End: ${DateFormat('yyyy-MM-dd').format(endDate)}'),
-                            ),
+                          ChoiceChip(
+                            label: const Text('OUT'),
+                            selected: scope == 'out',
+                            onSelected: (_) => setStateDialog(() {
+                              scope = 'out';
+                              endDate = startDate;
+                            }),
+                          ),
+                          ChoiceChip(
+                            label: const Text('FULL'),
+                            selected: scope == 'full',
+                            onSelected: (_) => setStateDialog(() => scope = 'full'),
                           ),
                         ],
                       ),
+                      const SizedBox(height: 12),
+                      Text(scope == 'full' ? 'Date Range' : 'Date', style: const TextStyle(color: Colors.black)),
+                      const SizedBox(height: 6),
+                      if (scope == 'full')
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () async {
+                                  final s = await pickDate(startDate);
+                                  if (s == null) return;
+                                  setStateDialog(() {
+                                    startDate = DateTime.parse(s);
+                                    if (endDate.isBefore(startDate)) endDate = startDate;
+                                  });
+                                },
+                                child: Text('Start: ${DateFormat('yyyy-MM-dd').format(startDate)}'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () async {
+                                  final s = await pickDate(endDate);
+                                  if (s == null) return;
+                                  setStateDialog(() {
+                                    endDate = DateTime.parse(s);
+                                    if (endDate.isBefore(startDate)) endDate = startDate;
+                                  });
+                                },
+                                child: Text('End: ${DateFormat('yyyy-MM-dd').format(endDate)}'),
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () async {
+                                  final s = await pickDate(startDate);
+                                  if (s == null) return;
+                                  setStateDialog(() {
+                                    startDate = DateTime.parse(s);
+                                    endDate = startDate;
+                                  });
+                                },
+                                child: Text(DateFormat('yyyy-MM-dd').format(startDate)),
+                              ),
+                            ),
+                          ],
+                        ),
                       const SizedBox(height: 12),
                       const Text('Reason / Notes', style: TextStyle(color: Colors.black)),
                       const SizedBox(height: 6),
@@ -382,11 +417,35 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
                           hintText: 'Write a short reason…',
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Attachment (surat tugas) can be added later on web (or after you add file upload in mobile).',
-                        style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () async {
+                                final picked = await FilePicker.platform.pickFiles(allowMultiple: true);
+                                if (picked == null) return;
+                                setStateDialog(() {
+                                  _pickedFiles = picked.files;
+                                });
+                              },
+                              icon: const Icon(Icons.attach_file),
+                              label: Text(
+                                _pickedFiles.isEmpty
+                                    ? 'Attach files (optional)'
+                                    : 'Attachments (${_pickedFiles.length})',
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
+                      if (workMode == 'on_duty') ...[
+                        const SizedBox(height: 8),
+                        const Text(
+                          'On Duty punches are presence-only (does not count work hours). You can submit without attachment and upload the assignment letter later while pending.',
+                          style: TextStyle(fontSize: 12, color: Colors.blueGrey),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -433,24 +492,54 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     final token = prefs.getString('token');
     final typedServerUrl = prefs.getString('typed_url');
 
-    final uri = Uri.parse('$typedServerUrl/api/attendance/work-mode-request/');
+    final uri = Uri.parse('$typedServerUrl/api/attendance/work-type-request/');
 
-    final resp = await http.post(
-      uri,
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $token',
-      },
-      body: jsonEncode({
-        'work_mode': workMode,
-        'scope': scope,
-        'start_date': startDate,
-        'end_date': endDate,
-        'description': description,
-      }),
-    );
+    // IN/OUT must be single-day.
+    final String normalizedEndDate = (scope == 'full') ? endDate : startDate;
 
-    return resp.statusCode == 201 || resp.statusCode == 200;
+    // Send multipart when attachments exist (surat tugas, etc.).
+    http.Response resp;
+    if (_pickedFiles.isNotEmpty) {
+      final req = http.MultipartRequest('POST', uri);
+      req.headers['Authorization'] = 'Bearer $token';
+      // Prefer new key, keep legacy key for compatibility.
+      req.fields['work_type'] = workMode;
+      req.fields['mode'] = workMode;
+      req.fields['scope'] = scope;
+      req.fields['start_date'] = startDate;
+      req.fields['end_date'] = normalizedEndDate;
+      req.fields['reason'] = description;
+
+      for (final f in _pickedFiles) {
+        if (f.path == null) continue;
+        req.files.add(await http.MultipartFile.fromPath('files', f.path!));
+      }
+
+      final streamed = await req.send();
+      resp = await http.Response.fromStream(streamed);
+    } else {
+      resp = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'work_type': workMode,
+          'mode': workMode,
+          'scope': scope,
+          'start_date': startDate,
+          'end_date': normalizedEndDate,
+          'reason': description,
+        }),
+      );
+    }
+
+    if (resp.statusCode == 200 || resp.statusCode == 201) {
+      setState(() => _pickedFiles = []);
+      return true;
+    }
+    return false;
   }
 
   Future<void> _approve(int id) async {
@@ -459,7 +548,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     final typedServerUrl = prefs.getString('typed_url');
 
     final uri = Uri.parse(
-        '$typedServerUrl/api/attendance/work-mode-request-approve/$id');
+        '$typedServerUrl/api/attendance/work-type-request-approve/$id');
 
     await http.put(uri, headers: {
       'Content-Type': 'application/json',
@@ -475,7 +564,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     final typedServerUrl = prefs.getString('typed_url');
 
     final uri = Uri.parse(
-        '$typedServerUrl/api/attendance/work-mode-request-reject/$id');
+        '$typedServerUrl/api/attendance/work-type-request-reject/$id');
 
     await http.put(uri, headers: {
       'Content-Type': 'application/json',
@@ -491,7 +580,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     final typedServerUrl = prefs.getString('typed_url');
 
     final uri = Uri.parse(
-        '$typedServerUrl/api/attendance/work-mode-request-cancel/$id');
+        '$typedServerUrl/api/attendance/work-type-request-cancel/$id');
 
     await http.put(uri, headers: {
       'Content-Type': 'application/json',
@@ -499,6 +588,42 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     });
 
     await refresh(reset: true);
+  }
+
+  Future<void> _uploadFiles(int id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('token');
+    final typedServerUrl = prefs.getString('typed_url');
+    if (token == null || typedServerUrl == null) return;
+
+    final picked = await FilePicker.platform.pickFiles(allowMultiple: true);
+    if (picked == null || picked.files.isEmpty) return;
+
+    final uri = Uri.parse('$typedServerUrl/api/attendance/work-type-request/$id');
+    final req = http.MultipartRequest('PATCH', uri);
+    req.headers['Authorization'] = 'Bearer $token';
+
+    for (final f in picked.files) {
+      if (f.path == null) continue;
+      req.files.add(await http.MultipartFile.fromPath('files', f.path!));
+    }
+
+    final streamed = await req.send();
+    final resp = await http.Response.fromStream(streamed);
+
+    if (resp.statusCode == 200) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Files uploaded')));
+      }
+      await refresh(reset: true);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload failed (${resp.statusCode})')),
+        );
+      }
+    }
   }
 
   @override
@@ -509,29 +634,39 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
       return _buildLoading();
     }
 
+    final tabs = <Tab>[
+      Tab(text: 'My Requests (${_myRequests.length})'),
+    ];
+    final views = <Widget>[
+      _buildList(_myRequests, isMyList: true),
+    ];
+
+    if (_canApprove) {
+      tabs.add(Tab(text: 'Approvals (${_approvalQueue.length})'));
+      views.add(_buildList(_approvalQueue, isMyList: false));
+    }
+
     return DefaultTabController(
-      length: 2,
+      length: tabs.length,
       child: Column(
         children: [
           TabBar(
             indicatorColor: Colors.red,
             labelColor: Colors.red,
             unselectedLabelColor: Colors.grey,
-            tabs: [
-              Tab(text: 'My Requests (${_myRequests.length})'),
-              Tab(text: 'Approvals (${_approvalQueue.length})'),
-            ],
+            tabs: tabs,
           ),
           Expanded(
-            child: TabBarView(
-              children: [
-                _buildList(_myRequests, isMyList: true),
-                _canApprove
-                    ? _buildList(_approvalQueue, isMyList: false)
-                    : _buildNoPermission(),
-              ],
-            ),
+            child: TabBarView(children: views),
           ),
+          if (!_canApprove)
+            Padding(
+              padding: const EdgeInsets.only(top: 8.0, bottom: 4.0),
+              child: Text(
+                'Approval access is not available for your account.',
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+              ),
+            ),
         ],
       ),
     );
@@ -565,7 +700,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
             Icon(Icons.lock_outline, size: 64, color: Colors.black54),
             SizedBox(height: 12),
             Text(
-              'You do not have approval access for Work Mode Requests.',
+              'You do not have approval access for Work Type Requests.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
@@ -658,7 +793,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
                       ],
                     ),
                     const SizedBox(height: 6),
-                    Text('Mode: ${_modeText(r)}   •   Type: ${_scopeText(r)}'),
+                    Text('Work Type: ${_modeText(r)}   •   Scope: ${_scopeText(r)}'),
                     const SizedBox(height: 4),
                     Text('Date: ${_dateText(r)}'),
                   ],
@@ -675,7 +810,10 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
     final id = r['id'];
     final status = _statusText(r);
 
-    final bool isPending = status == 'PENDING';
+    final bool canCancel = (status == 'PENDING' || status == 'WAITING') && isMyList;
+    final bool isWaiting = status == 'WAITING';
+    final bool isOnDuty = _modeText(r) == 'ON DUTY';
+    final bool canUploadLetter = isMyList && isOnDuty && status == 'PENDING';
 
     await showDialog(
       context: context,
@@ -685,7 +823,7 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
           title: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Work Mode Request',
+              const Text('Work Type Request',
                   style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
               IconButton(
                 icon: const Icon(Icons.close),
@@ -701,33 +839,54 @@ class WorkModeRequestTabState extends State<WorkModeRequestTab>
                 children: [
                   _kv('Employee', _employeeName(r)),
                   _kv('Status', status),
-                  _kv('Mode', _modeText(r)),
-                  _kv('Type', _scopeText(r)),
+                  _kv('Work Type', _modeText(r)),
+                  _kv('Scope', _scopeText(r)),
                   _kv('Date', _dateText(r)),
-                  if ((r['description'] ?? '').toString().trim().isNotEmpty)
-                    _kv('Notes', (r['description'] ?? '').toString()),
+                  if ((r['reason'] ?? r['description'] ?? '').toString().trim().isNotEmpty)
+                    _kv('Reason', (r['reason'] ?? r['description']).toString()),
+                  if (r['file_urls'] is List && (r['file_urls'] as List).isNotEmpty)
+                    _kv('Attachments', '${(r['file_urls'] as List).length} file(s)'),
                 ],
               ),
             ),
           ),
           actions: [
-            if (isPending && isMyList) ...[
+            if (canCancel) ...[
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () async {
-                    await _cancel(id);
-                    if (!mounted) return;
-                    Navigator.of(ctx).pop();
-                  },
-                  style: ButtonStyle(
-                    backgroundColor:
-                    MaterialStateProperty.all<Color>(Colors.red),
-                  ),
-                  child: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () async {
+                          await _cancel(id);
+                          if (!mounted) return;
+                          Navigator.of(ctx).pop();
+                        },
+                        style: ButtonStyle(
+                          backgroundColor:
+                          MaterialStateProperty.all<Color>(Colors.red),
+                        ),
+                        child: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                      ),
+                    ),
+                    if (canUploadLetter) ...[
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () async {
+                            await _uploadFiles(id);
+                            if (!mounted) return;
+                            Navigator.of(ctx).pop();
+                          },
+                          child: const Text('Upload Letter'),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               )
-            ] else if (isPending && !isMyList && _canApprove) ...[
+            ] else if (isWaiting && !isMyList && _canApprove) ...[
               Row(
                 children: [
                   Expanded(
