@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../res/utilities/permission_guard.dart';
 import '../res/utilities/request_payloads.dart';
 import '../res/utilities/leave_request_form_logic.dart';
+import '../res/utilities/attachment_access.dart';
 import 'package:dropdown_search/dropdown_search.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
@@ -23,6 +24,18 @@ class LeaveRequest extends StatefulWidget {
 
 class _LeaveRequest extends State<LeaveRequest>
     with SingleTickerProviderStateMixin {
+  List<MobileAttachmentItem> _attachmentsFromPayload(dynamic payload) {
+    if (payload is Map) {
+      return extractMobileAttachments(Map<String, dynamic>.from(payload), baseUrl: baseUrl);
+    }
+    return const <MobileAttachmentItem>[];
+  }
+
+  Future<void> _openPayloadAttachment(dynamic payload) async {
+    final items = _attachmentsFromPayload(payload);
+    if (items.isEmpty) return;
+    await openMobileAttachment(context, items.first, baseUrl: baseUrl);
+  }
   String _getBreakdown(String breakdownValue) {
     return leaveBreakdownLabel(breakdownValue);
   }
@@ -1869,7 +1882,7 @@ class _LeaveRequest extends State<LeaveRequest>
                                 ),
                               ),
                               if (currentLeaveRequests.isNotEmpty &&
-                                  currentLeaveRequests[0]['attachment'] != null)
+                                  _attachmentsFromPayload(currentLeaveRequests[0]).isNotEmpty)
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
@@ -1878,29 +1891,7 @@ class _LeaveRequest extends State<LeaveRequest>
                                       style: TextStyle(color: Colors.grey.shade700),
                                     ),
                                     TextButton(
-                                      onPressed: () {
-                                        String pdfPath =
-                                        currentLeaveRequests[0]['attachment'];
-                                        if (pdfPath.endsWith('.png') ||
-                                            pdfPath.endsWith('.jpg') ||
-                                            pdfPath.endsWith('.jpeg') ||
-                                            pdfPath.endsWith('.gif')) {
-                                          Navigator.push(
-                                            context,
-                                            MaterialPageRoute(
-                                              builder: (context) =>
-                                                  ImageViewer(imagePath: pdfPath,
-                                                    token: getToken,),
-                                            ),
-                                          );
-                                        } else {
-                                          Navigator.pushNamed(
-                                            context,
-                                            '/attachment_view',
-                                            arguments: pdfPath,
-                                          );
-                                        }
-                                      },
+                                      onPressed: () => _openPayloadAttachment(currentLeaveRequests[0]),
                                       child: const Text(
                                         'View Attachment',
                                         style: TextStyle(
@@ -3721,7 +3712,7 @@ class _LeaveRequest extends State<LeaveRequest>
                           ],
                         ),
                         if (currentLeaveRequests.isNotEmpty &&
-                            currentLeaveRequests[0]['attachment'] != null)
+                            _attachmentsFromPayload(currentLeaveRequests[0]).isNotEmpty)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -3730,29 +3721,7 @@ class _LeaveRequest extends State<LeaveRequest>
                                 style: TextStyle(color: Colors.grey.shade700),
                               ),
                               TextButton(
-                                onPressed: () {
-                                  String pdfPath =
-                                  currentLeaveRequests[0]['attachment'];
-                                  if (pdfPath.endsWith('.png') ||
-                                      pdfPath.endsWith('.jpg') ||
-                                      pdfPath.endsWith('.jpeg') ||
-                                      pdfPath.endsWith('.gif')) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) =>
-                                            ImageViewer(imagePath: pdfPath,
-                                              token: getToken,),
-                                      ),
-                                    );
-                                  } else {
-                                    Navigator.pushNamed(
-                                      context,
-                                      '/attachment_view',
-                                      arguments: pdfPath,
-                                    );
-                                  }
-                                },
+                                onPressed: () => _openPayloadAttachment(currentLeaveRequests[0]),
                                 child: const Text(
                                   'View Attachment',
                                   style: TextStyle(

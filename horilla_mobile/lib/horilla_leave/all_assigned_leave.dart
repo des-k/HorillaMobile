@@ -1067,10 +1067,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
                                       Positioned.fill(
                                         child: ClipOval(
                                           child: Image.network(
-                                            baseUrl +
-                                                leaveRecords[0]
-                                                ['leave_type_id']
-                                                ['icon'],
+                                            leaveRecords[0]['leave_type_id']['icon'],
                                             headers: {
                                               "Authorization": "Bearer $token",
                                             },

@@ -529,7 +529,7 @@ Widget buildListItem(
                   Positioned.fill(
                     child: ClipOval(
                       child: Image.network(
-                        baseUrl + record['icon'],
+                        record['icon'],
                         headers: {
                           "Authorization": "Bearer $token",
                         },

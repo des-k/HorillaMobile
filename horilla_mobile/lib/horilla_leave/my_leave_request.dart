@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:shimmer/shimmer.dart';
 import '../res/utilities/permission_guard.dart';
+import '../res/utilities/attachment_access.dart';
 
 class MyLeaveRequest extends StatefulWidget {
   const MyLeaveRequest({super.key});
@@ -20,6 +21,18 @@ class MyLeaveRequest extends StatefulWidget {
 
 class _MyLeaveRequest extends State<MyLeaveRequest>
     with SingleTickerProviderStateMixin {
+  List<MobileAttachmentItem> _attachmentsFromPayload(dynamic payload) {
+    if (payload is Map) {
+      return extractMobileAttachments(Map<String, dynamic>.from(payload), baseUrl: baseUrl);
+    }
+    return const <MobileAttachmentItem>[];
+  }
+
+  Future<void> _openPayloadAttachment(dynamic payload) async {
+    final items = _attachmentsFromPayload(payload);
+    if (items.isEmpty) return;
+    await openMobileAttachment(context, items.first, baseUrl: baseUrl);
+  }
   String? _permissionStatusMessage;
   late Future<void> _permissionFuture;
 
@@ -1772,7 +1785,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.02),
                             if (currentRequests.isNotEmpty &&
-                                currentRequests[0]['attachment'] != null)
+                                _attachmentsFromPayload(currentRequests[0]).isNotEmpty)
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                 children: [
@@ -1781,30 +1794,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                     style: TextStyle(color: Colors.grey.shade700),
                                   ),
                                   TextButton(
-                                    onPressed: () {
-                                      String pdfPath =
-                                      currentRequests[0]['attachment'];
-                                      if (pdfPath.endsWith('.png') ||
-                                          pdfPath.endsWith('.jpg') ||
-                                          pdfPath.endsWith('.jpeg') ||
-                                          pdfPath.endsWith('.gif')) {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (context) => ImageViewer(
-                                              imagePath: baseUrl + pdfPath,
-                                              token: getToken,
-                                            ),
-                                          ),
-                                        );
-                                      } else {
-                                        Navigator.pushNamed(
-                                          context,
-                                          '/attachment_view',
-                                          arguments: pdfPath,
-                                        );
-                                      }
-                                    },
+                                    onPressed: () => _openPayloadAttachment(currentRequests[0]),
                                     child: const Text(
                                       'View Attachment',
                                       style: TextStyle(
@@ -3171,9 +3161,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                     Positioned.fill(
                                       child: ClipOval(
                                         child: Image.network(
-                                          baseUrl +
-                                              record['leave_type_id']
-                                              ['icon'],
+                                          record['leave_type_id']['icon'],
                                           headers: {
                                             "Authorization": "Bearer $token",
                                           },
@@ -3375,7 +3363,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           ),
                         ),
                         if (currentRequests.isNotEmpty &&
-                            currentRequests[0]['attachment'] != null)
+                            _attachmentsFromPayload(currentRequests[0]).isNotEmpty)
                           Row(
                             mainAxisAlignment:
                             MainAxisAlignment.spaceBetween,
@@ -3386,29 +3374,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                     color: Colors.grey.shade700),
                               ),
                               TextButton(
-                                onPressed: () {
-                                  String pdfPath =
-                                  currentRequests[0]['attachment'];
-                                  if (pdfPath.endsWith('.png') ||
-                                      pdfPath.endsWith('.jpg') ||
-                                      pdfPath.endsWith('.jpeg') ||
-                                      pdfPath.endsWith('.gif')) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => ImageViewer(
-                                          imagePath: baseUrl + pdfPath,
-                                          token: getToken,),
-                                      ),
-                                    );
-                                  } else {
-                                    Navigator.pushNamed(
-                                      context,
-                                      '/attachment_view',
-                                      arguments: pdfPath,
-                                    );
-                                  }
-                                },
+                                onPressed: () => _openPayloadAttachment(currentRequests[0]),
                                 child: const Text(
                                   'View Attachment',
                                   style: TextStyle(
@@ -3905,9 +3871,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                           Positioned.fill(
                                             child: ClipOval(
                                               child: Image.network(
-                                                baseUrl +
-                                                    record['leave_type_id']
-                                                    ['icon'],
+                                                record['leave_type_id']['icon'],
                                                 headers: {
                                                   "Authorization": "Bearer $token",
                                                 },

@@ -450,7 +450,7 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
                               Positioned.fill(
                                 child: ClipOval(
                                   child: Image.network(
-                                    baseUrl + typeDetails['icon'],
+                                    typeDetails['icon'],
                                     headers: {
                                       "Authorization": "Bearer $getToken", // Changed from token to getToken
                                     },
