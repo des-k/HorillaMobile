@@ -8,6 +8,7 @@ import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class EmployeeFormPage extends StatefulWidget {
   const EmployeeFormPage({Key? key}) : super(key: key);
@@ -5131,15 +5132,13 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                       const Text('Active Face Photo', style: TextStyle(fontWeight: FontWeight.bold)),
                                       const SizedBox(height: 8),
                                       if (faceImage.isNotEmpty)
-                                        ClipRRect(
+                                        AuthenticatedNetworkImage(
+                                          imageUrl: faceImage,
+                                          width: 120,
+                                          height: 120,
+                                          fit: BoxFit.cover,
                                           borderRadius: BorderRadius.circular(8),
-                                          child: Image.network(
-                                            faceImage,
-                                            width: 120,
-                                            height: 120,
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (_, __, ___) => const Text('-'),
-                                          ),
+                                          errorWidget: const Text('-'),
                                         )
                                       else
                                         const Text('-'),
