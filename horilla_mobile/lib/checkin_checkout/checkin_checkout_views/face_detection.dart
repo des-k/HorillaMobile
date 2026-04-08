@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:http/io_client.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:horilla/res/utilities/device_info.dart';
 import 'checkin_checkout_form.dart';
 import '../controllers/face_detection_controller.dart';
 
@@ -210,10 +211,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
 
       debugPrint("🔎 Fetching biometric image: $imageUrl");
 
-      // Optional: bypass self-signed certificate issues (common in internal servers)
       final httpClient = HttpClient();
-      httpClient.badCertificateCallback =
-          (X509Certificate cert, String host, int port) => true;
       httpClient.autoUncompress = false;
 
       ioClient = IOClient(httpClient);
@@ -350,13 +348,14 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     );
   }
 
+
   Future<void> _handleComparisonResult(bool isMatched, File capturedFile) async {
     if (!isMatched || !mounted) return;
 
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString("token");
     final typedServerUrl = prefs.getString("typed_url");
-    final geoFencing = prefs.getBool("geo_fencing") ?? false;
+    // Location is required for every punch when attendance proof requires it.
 
     if (token == null || typedServerUrl == null) {
       if (!mounted) return;
@@ -366,7 +365,8 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
       return;
     }
 
-    if (geoFencing && widget.userLocation == null) {
+    final pos = widget.userLocation;
+    if (pos == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Location unavailable. Cannot proceed.')),
       );
@@ -387,7 +387,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
         capturedFile: capturedFile,
         baseUrl: base,
         token: token,
-        geoFencing: geoFencing,
+        position: pos,
       );
 
       if (response.statusCode == 200 && mounted) {
@@ -409,6 +409,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           'first_check_in': payload['first_check_in'] ?? payload['clock_in'] ?? payload['clock_in_time'],
           'last_check_out': payload['last_check_out'],
           'worked_hours': payload['worked_hours'] ?? payload['duration'],
+          'refreshStatus': true,
         });
       } else if (mounted) {
         final errorMessage = getErrorMessage(response.body);
@@ -420,7 +421,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
             capturedFile: capturedFile,
             baseUrl: base,
             token: token,
-            geoFencing: geoFencing,
+            position: pos,
           );
         } else {
           showCheckInFailedDialog(context, errorMessage);
@@ -431,6 +432,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Network error: $e')),
         );
+        Navigator.pop(context, {'refreshStatus': true});
       }
     }
   }
@@ -457,7 +459,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     required File capturedFile,
     required String baseUrl,
     required String token,
-    required bool geoFencing,
+    required Position position,
   }) async {
     final uri = Uri.parse('$baseUrl/$endpoint');
 
@@ -465,10 +467,13 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     request.headers['Authorization'] = 'Bearer $token';
     request.headers['Accept'] = 'application/json';
 
-    if (geoFencing && widget.userLocation != null) {
-      request.fields['latitude'] = widget.userLocation!.latitude.toString();
-      request.fields['longitude'] = widget.userLocation!.longitude.toString();
-    }
+    request.fields['latitude'] = position.latitude.toString();
+    request.fields['longitude'] = position.longitude.toString();
+    request.fields['accuracy'] = position.accuracy.toString();
+    request.fields['captured_at'] = DateTime.now().toIso8601String();
+
+    final deviceInfoPayload = await HorillaDeviceInfo.getPayload();
+    request.fields.addAll(deviceInfoPayload);
 
     request.files.add(
       await http.MultipartFile.fromPath(
@@ -487,7 +492,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
     required File capturedFile,
     required String baseUrl,
     required String token,
-    required bool geoFencing,
+    required Position position,
   }) async {
     if (!mounted) return;
 
@@ -506,7 +511,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           TextButton(
             onPressed: () {
               Navigator.of(ctx).pop(); // close dialog
-              if (mounted) Navigator.of(context).pop(); // close scanner
+              if (mounted) Navigator.of(context).pop({'refreshStatus': true}); // close scanner
             },
             child: const Text('Cancel'),
           ),
@@ -519,7 +524,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
                   capturedFile: capturedFile,
                   baseUrl: baseUrl,
                   token: token,
-                  geoFencing: geoFencing,
+                  position: position,
                 );
 
                 if (!mounted) return;
@@ -540,6 +545,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
                         payload['clock_in_time'],
                     'last_check_out': payload['last_check_out'],
                     'worked_hours': payload['worked_hours'] ?? payload['duration'],
+                    'refreshStatus': true,
                   });
                 } else {
                   final msg = getErrorMessage(outRes.body);
@@ -550,6 +556,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(content: Text('Network error: $e')),
                 );
+                Navigator.pop(context, {'refreshStatus': true});
               }
             },
             child: const Text('Proceed to Check Out'),
@@ -589,7 +596,7 @@ class _FaceScannerState extends State<FaceScanner> with SingleTickerProviderStat
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
-              if (mounted) Navigator.pop(context);
+              if (mounted) Navigator.pop(context, {'refreshStatus': true});
             },
             child: const Text('OK'),
           ),

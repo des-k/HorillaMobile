@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:html/parser.dart' as html_parser;
@@ -55,6 +56,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
   bool _drawerPermissionHourAccount = false;
   bool _isPermissionCheckComplete = false;
   late String getToken = '';
+  String? _permissionStatusMessage;
 
   @override
   void initState() {
@@ -112,34 +114,37 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
 
   Future<void> permissionChecks() async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri =
-    Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance');
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _permissionStatusMessage = 'Server error. Try again later.';
+      });
+      return;
+    }
 
-    try {
-      var response = await http.get(uri, headers: {
+    final result = await guardedPermissionGet(
+      Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance'),
+      headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
-      });
+      },
+    );
 
-      if (response.statusCode == 200) {
-        setState(() {
-          _drawerPermissionOverview = true;
-          _drawerPermissionAttendance = true;
-          _drawerPermissionAttendanceRequest = true;
-          _drawerPermissionHourAccount = true;
-        });
+    if (!mounted) return;
+    setState(() {
+      if (result.isAllowed) {
+        _drawerPermissionOverview = true;
+        _drawerPermissionAttendance = true;
+        _drawerPermissionAttendanceRequest = true;
+        _drawerPermissionHourAccount = true;
       } else {
-        setState(() {
-          _drawerPermissionAttendanceRequest = true;
-          _drawerPermissionHourAccount = true;
-        });
+        _permissionStatusMessage = result.message;
       }
-    } catch (e) {
-      print('Error checking permissions: $e');
-    }
+    });
   }
+
 
   void prefetchData() async {
     final prefs = await SharedPreferences.getInstance();
@@ -389,6 +394,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                 ),
               ),
             ),
+            permissionNoticeTile(_permissionStatusMessage, onRetry: permissionChecks),
             _isPermissionCheckComplete
                 ? Column(
               children: [
@@ -414,18 +420,10 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
                     Navigator.pushNamed(context, '/attendance_request');
                   },
                 ),
-                ListTile(
-                  title: const Text('Hour Account'),
-                  onTap: () {
-                    Navigator.pushNamed(
-                        context, '/employee_hour_account');
-                  },
-                ),
               ],
             )
                 : Column(
               children: [
-                shimmerListTile(),
                 shimmerListTile(),
                 shimmerListTile(),
                 shimmerListTile(),
@@ -435,7 +433,12 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
         ),
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
+          ? SafeArea(
+            top: false,
+            left: false,
+            right: false,
+            bottom: true,
+            child: AnimatedNotchBottomBar(
         /// Provide NotchBottomBarController
         notchBottomBarController: _controller,
         color: Colors.red,
@@ -495,7 +498,8 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
               break;
           }
         },
-      )
+      ),
+          )
           : null,
     );
   }

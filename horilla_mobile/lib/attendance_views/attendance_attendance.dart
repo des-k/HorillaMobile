@@ -1,6229 +1,1164 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/services.dart';
+import 'dart:io';
+
+import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
-import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shimmer/shimmer.dart';
-import 'package:flutter_typeahead/flutter_typeahead.dart';
+import 'package:open_file/open_file.dart';
 
+/// Attendance -> Attendance
+///
+/// NOTE:
+/// - UI only (mobile DOES NOT calculate shift/late/earlyout/duty/holiday/correction).
+/// - All values are displayed as returned by backend.
+/// - Data source: GET {typed_url}/api/attendance/attendances-recap/?employee_id=<id>&month=YYYY-MM
 class AttendanceAttendance extends StatefulWidget {
   const AttendanceAttendance({super.key});
 
   @override
-  _AttendanceAttendance createState() => _AttendanceAttendance();
+  State<AttendanceAttendance> createState() => _AttendanceAttendanceState();
 }
 
-class _AttendanceAttendance extends State<AttendanceAttendance>
-    with SingleTickerProviderStateMixin {
-  late Map<String, dynamic> arguments;
-  late String baseUrl = '';
-  TextEditingController workedHoursController = TextEditingController();
-  TextEditingController minimumHourController = TextEditingController();
-  TextEditingController checkInHoursController = TextEditingController();
-  TextEditingController checkoutHoursController = TextEditingController();
-  TextEditingController checkOutDateController = TextEditingController();
-  TextEditingController attendanceDateController = TextEditingController();
-  TextEditingController checkInDateController = TextEditingController();
-  TextEditingController dateInput = TextEditingController();
-  TextEditingController checkInTime = TextEditingController();
-  TextEditingController checkOutTime = TextEditingController();
-  TextEditingController dateInputOvertime = TextEditingController();
-  TextEditingController checkInTimeOvertime = TextEditingController();
-  TextEditingController checkOutTimeOvertime = TextEditingController();
-  TextEditingController dateInputValidated = TextEditingController();
-  TextEditingController checkInTimeValidated = TextEditingController();
-  TextEditingController checkOutTimeValidated = TextEditingController();
-  List<Map<String, dynamic>> requestsNonValidAttendance = [];
-  List<Map<String, dynamic>> requestsMyAttendance = [];
-  List<Map<String, dynamic>> requestsOvertimeAttendance = [];
-  List<Map<String, dynamic>> requestsValidatedAttendance = [];
-  List<Map<String, dynamic>> requestsShiftNames = [];
-  List<Map<String, dynamic>> filteredNonValidAttendance = [];
-  List<Map<String, dynamic>> filteredMyAttendance = [];
+class _AttendanceAttendanceState extends State<AttendanceAttendance> {
+  // SharedPreferences values
+  String _baseUrl = '';
+  String _token = '';
+  int? _currentEmployeeId;
 
-  List<Map<String, dynamic>> filteredOvertimeAttendance = [];
-  List<Map<String, dynamic>> filteredValidatedAttendance = [];
-  List<String> shiftDetails = [];
-  String searchText = '';
-  String? _errorMessage;
-  String workHoursSpent = '';
-  String editWorkHoursSpent = '';
-  String minimumHoursSpent = '';
-  String editMinimumHoursSpent = '';
-  String checkInHoursSpent = '';
-  String editCheckInHoursSpent = '';
-  String editCheckOutHoursSpent = '';
-  String checkOutHoursSpent = '';
-  String? createEmployee;
-  String? createShift;
-  String? editShift;
-  String? selectedEmployeeId;
-  String? selectedEditEmployeeId;
-  String? selectedShiftId;
-  String? selectedEditShiftId;
-  String? editEmployee;
-  var employeeItems = [''];
-  var shiftItems = [''];
-  int maxCount = 5;
-  final List<Widget> bottomBarPages = [];
-  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  final ScrollController _scrollController = ScrollController();
-  final _controller = NotchBottomBarController(index: -1);
-  final TextEditingController _typeAheadController = TextEditingController();
-  final TextEditingController _typeAheadCreateController =
-  TextEditingController();
-  final TextEditingController _typeAheadCreateShiftController =
-  TextEditingController();
-  bool _validateEmployee = false;
-  bool _validateDate = false;
-  bool _editValidateDate = false;
-  bool _validateShift = false;
-  bool _validateCheckInDate = false;
-  bool _validateCheckIn = false;
-  bool showDeleteMessage = false;
-  bool _validateCheckOutDate = false;
-  bool _validateWorkingHours = false;
-  bool _validateMinimumHours = false;
-  bool _validateCheckOut = false;
-  bool permissionCheck = false;
-  bool managerCheck = false;
-  bool attendanceTypeCheck = false;
-  bool isAction = true;
-  bool createAttendance = false;
-  bool isSaveClick = true;
-  bool isLoading = true;
-  bool permissionOverview = true;
-  bool permissionAttendance = false;
-  bool permissionAttendanceRequest = false;
-  bool permissionHourAccount = false;
-  Map<String, String> employeeIdMap = {};
-  Map<String, String> shiftIdMap = {};
-  int currentPage = 1;
-  int toValidate = 0;
-  int myAttendances = 0;
-  int overtime = 0;
-  int validated = 0;
-  Timer? _debounce;
-  bool isFetchingMore = false;
-  bool hasMoreMyAttendance = true;
-  bool hasMoreNonValidated = true;
-  bool hasMoreOvertime = true;
-  bool hasMoreValidated = true;
+  // Used by bottom navigation to open Profile page.
+  Map<String, dynamic> _profileArguments = {};
 
-
+  // Drawer permissions (follow existing app pattern)
   bool _permissionOverview = false;
-  bool _permissionAttendance = false;
   bool _permissionAttendanceRequest = false;
-  bool _permissionHourAccount = false;
-  bool _permissionsLoaded = false;
-  late String getToken = '';
 
+  // Filters
+  DateTime _selectedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  final DateFormat _monthFormat = DateFormat('yyyy-MM');
+
+  // Employee selector
+  bool _canSelectEmployee = false;
+  int? _selectedEmployeeId;
+  String _currentEmployeeName = '';
+  final TextEditingController _employeeController = TextEditingController();
+  final List<_EmployeeOption> _employeeOptions = [];
+
+  // Bottom navigation
+  final NotchBottomBarController _bottomController = NotchBottomBarController(index: -1);
+  final int _maxCount = 5;
+
+  // Data state
+  bool _isLoading = true;
+  bool _isRefreshing = false;
+  bool _isExporting = false;
+  String? _error;
+  List<MonthlyAttendanceRow> _rows = [];
+  MonthlyAttendanceSummary _summary = const MonthlyAttendanceSummary();
 
   @override
   void initState() {
     super.initState();
-    currentPage = 1;
-    prefetchData();
-    _simulateLoading();
-    _scrollController.addListener(_scrollListener);
-    getMyAttendance(reset: true);
-    getAllNonValidatedAttendance(reset: true);
-    getAllOvertimeAttendance(reset: true);
-    getAllValidatedAttendance(reset: true);
-    getEmployees();
-    getShiftDetails();
-    attendanceTypeChecks();
-    managerChecks();
-    getBaseUrl();
-    fetchToken();
-    loadPermissionsFromStorage();
-
-    // Load permissions once
-    permissionChecks().then((_) {
-      setState(() {
-        _permissionsLoaded = true;
-      });
-    });
-
-    // Initialize controllers
-    dateInput.text = "";
-    checkInTime.text = "";
-    checkOutTime.text = "";
-    dateInputOvertime.text = "";
-    checkInTimeOvertime.text = "";
-    checkOutTimeOvertime.text = "";
-    dateInputValidated.text = "";
-    checkInTimeValidated.text = "";
-    checkOutTimeValidated.text = "";
-  }
-
-  Future<void> _simulateLoading() async {
-    await Future.delayed(const Duration(seconds: 5));
-    setState(() {});
-  }
-
-  Future loadPermissionsFromStorage() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _permissionOverview = prefs.getBool("perm_overview") ?? false;
-      _permissionAttendance = prefs.getBool("perm_attendance") ?? false;
-      _permissionAttendanceRequest = prefs.getBool("perm_attendance_request") ?? false;
-      _permissionHourAccount = prefs.getBool("perm_hour_account") ?? false;
-      _permissionsLoaded = true;
-    });
+    _bootstrap();
   }
 
   @override
   void dispose() {
-    _scrollController.removeListener(_scrollListener);
-    _scrollController.dispose();
-    _debounce?.cancel();
+    _employeeController.dispose();
     super.dispose();
   }
 
-  Future<void> getBaseUrl() async {
+  Future<void> _bootstrap() async {
     final prefs = await SharedPreferences.getInstance();
-    var typedServerUrl = prefs.getString("typed_url");
+
+    final typedUrl = prefs.getString('typed_url') ?? '';
+    final token = prefs.getString('token') ?? '';
+
+    final int? employeeId = prefs.getInt('employee_id') ??
+        int.tryParse(prefs.getString('employee_id') ?? '');
+
+    // Load permissions already stored by the app (same keys as the legacy page)
+    final permOverview = prefs.getBool('perm_overview') ?? false;
+    final permAttReq = prefs.getBool('perm_attendance_request') ?? false;
+
     setState(() {
-      baseUrl = typedServerUrl ?? '';
+      _baseUrl = typedUrl;
+      _token = token;
+      _currentEmployeeId = employeeId;
+      _selectedEmployeeId = null;
+
+      _permissionOverview = permOverview;
+      _permissionAttendanceRequest = permAttReq;
+
+      // Spec: employee selector only for admin/HR.
+      // We determine this reliably via backend permission check (employee.view_employee).
+      _canSelectEmployee = false;
     });
+
+    await _loadCurrentEmployeeProfile();
+
+    await _fetchMonthlyAttendance(showLoader: true);
   }
 
-  Future<void> fetchToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
+  Future<http.Response?> _safeGet(Uri uri) async {
+    if (_token.isEmpty) return null;
+    try {
+      return await http
+          .get(uri, headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $_token',
+      })
+          .timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _loadCurrentEmployeeProfile() async {
+    final employeeId = _currentEmployeeId;
+    if (employeeId == null || _baseUrl.isEmpty || _token.isEmpty) {
+      setState(() {
+        _currentEmployeeName = employeeId == null ? '' : 'Employee #$employeeId';
+        _employeeController.text = _currentEmployeeName;
+        _profileArguments = employeeId == null ? {} : {'employee_id': employeeId};
+      });
+      return;
+    }
+
+    // Use trailing slash to avoid 301.
+    final uri = Uri.parse('$_baseUrl/api/employee/employees/$employeeId/');
+    final res = await _safeGet(uri);
+
+    if (res != null && res.statusCode == 200) {
+      final data = jsonDecode(res.body);
+
+      final first = (data['employee_first_name'] ?? '').toString();
+      final last = (data['employee_last_name'] ?? '').toString();
+      final name = ('$first $last').trim();
+
+      if (!mounted) return;
+      setState(() {
+        _currentEmployeeName = name.isEmpty ? 'Employee #$employeeId' : name;
+        _employeeController.text = _currentEmployeeName;
+
+        // Keep same shape as existing code that navigates to EmployeeForm.
+        _profileArguments = {
+          'employee_id': data['id'] ?? employeeId,
+          'employee_name': _currentEmployeeName,
+          'badge_id': data['badge_id'],
+          'email': data['email'],
+          'phone': data['phone'],
+          'date_of_birth': data['dob'],
+          'gender': data['gender'],
+          'address': data['address'],
+          'country': data['country'],
+          'state': data['state'],
+          'city': data['city'],
+          'qualification': data['qualification'],
+          'experience': data['experience'],
+          'marital_status': data['marital_status'],
+          'children': data['children'],
+          'emergency_contact': data['emergency_contact'],
+          'emergency_contact_name': data['emergency_contact_name'],
+          'employee_work_info_id': data['employee_work_info_id'],
+          'employee_bank_details_id': data['employee_bank_details_id'],
+          'employee_profile': data['employee_profile'],
+          'job_position_name': data['job_position_name'],
+        };
+      });
+    } else {
+      if (!mounted) return;
+      setState(() {
+        _currentEmployeeName = 'Employee #$employeeId';
+        _employeeController.text = _currentEmployeeName;
+        _profileArguments = {'employee_id': employeeId};
+      });
+    }
+  }
+
+  Future<void> _pickMonth() async {
+    // Month picker (YYYY-MM) - custom lightweight dialog (no extra deps).
+    final now = DateTime.now();
+    final picked = await showDialog<DateTime>(
+      context: context,
+      builder: (context) {
+        int year = _selectedMonth.year;
+        const minYear = 2000;
+        final int maxYear = now.year; // cannot pick future years
+
+        String monthLabel(int m) {
+          // Uses device locale for month short name.
+          return DateFormat('MMM').format(DateTime(2000, m, 1));
+        }
+
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: const [
+                      Icon(Icons.calendar_month),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Select Month',
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      IconButton(
+                        tooltip: 'Previous Year',
+                        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+                        padding: EdgeInsets.zero,
+                        onPressed: year > minYear ? () => setStateDialog(() => year -= 1) : null,
+                        icon: const Icon(Icons.chevron_left),
+                      ),
+                      Expanded(
+                        child: Center(
+                          child: Text(
+                            year.toString(),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Next Year',
+                        constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+                        padding: EdgeInsets.zero,
+                        onPressed: year < maxYear ? () => setStateDialog(() => year += 1) : null,
+                        icon: const Icon(Icons.chevron_right),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (int m = 1; m <= 12; m++)
+                      ChoiceChip(
+                        label: Text(monthLabel(m)),
+                        selected: year == _selectedMonth.year && m == _selectedMonth.month,
+                        onSelected: (year == now.year && m > now.month)
+                            ? null
+                            : (_) {
+                          Navigator.of(context).pop(DateTime(year, m, 1));
+                        },
+                      ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (picked == null) return;
+
     setState(() {
-      getToken = token ?? '';
-      print('token: $getToken');
+      _selectedMonth = picked;
     });
-  }
 
-  void _scrollListener() {
-    if (_scrollController.position.pixels >=
-        _scrollController.position.maxScrollExtent - 100 &&
-        !isFetchingMore) {
-      setState(() => isFetchingMore = true);
-      currentPage++;
-      Future.wait([
-        getMyAttendance(),
-        getAllNonValidatedAttendance(),
-        getAllOvertimeAttendance(),
-        getAllValidatedAttendance()
-      ]).then((_) {
-        setState(() => isFetchingMore = false);
-      });
-    }
-  }
-
-  void showCreateAnimation() {
-    String jsonContent = '''
-{
-  "imagePath": "Assets/gif22.gif"
-}
-''';
-    Map<String, dynamic> jsonData = json.decode(jsonContent);
-    String imagePath = jsonData['imagePath'];
-
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return Dialog(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.3,
-            width: MediaQuery.of(context).size.width * 0.85,
-            child: SingleChildScrollView(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset(imagePath),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Attendance Created Successfully",
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.red),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.of(context).pop();
-    });
-  }
-
-  void showUpdateAnimation() {
-    String jsonContent = '''
-{
-  "imagePath": "Assets/gif22.gif"
-}
-''';
-    Map<String, dynamic> jsonData = json.decode(jsonContent);
-    String imagePath = jsonData['imagePath'];
-
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return Dialog(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.3,
-            width: MediaQuery.of(context).size.width * 0.85,
-            child: SingleChildScrollView(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset(imagePath),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Attendance Updated Successfully",
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.red),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.of(context).pop();
-    });
-  }
-
-  void showDeleteAnimation() {
-    String jsonContent = '''
-{
-  "imagePath": "Assets/gif22.gif"
-}
-''';
-    Map<String, dynamic> jsonData = json.decode(jsonContent);
-    String imagePath = jsonData['imagePath'];
-
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return Dialog(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.3,
-            width: MediaQuery.of(context).size.width * 0.85,
-            child: SingleChildScrollView(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset(imagePath),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Attendance Deleted Successfully",
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.red),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.of(context).pop();
-    });
-  }
-
-  void showValidateAnimation() {
-    String jsonContent = '''
-{
-  "imagePath": "Assets/gif22.gif"
-}
-''';
-    Map<String, dynamic> jsonData = json.decode(jsonContent);
-    String imagePath = jsonData['imagePath'];
-
-    showDialog(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return Dialog(
-          child: SizedBox(
-            height: MediaQuery.of(context).size.height * 0.3,
-            width: MediaQuery.of(context).size.width * 0.85,
-            child: SingleChildScrollView(
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset(imagePath),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "Attendance Validated Successfully",
-                      style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.red),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-    Future.delayed(const Duration(seconds: 2), () {
-      Navigator.of(context).pop();
-    });
+    await _fetchMonthlyAttendance(showLoader: true);
   }
 
 
-  Future getMyAttendance({bool reset = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
+  Future<void> _fetchMonthlyAttendance({required bool showLoader}) async {
+    final employeeId = _selectedEmployeeId;
 
-    if (reset) {
-      currentPage = 1;
-      requestsMyAttendance.clear();
-      hasMoreMyAttendance = true;
-    }
-    if (!hasMoreMyAttendance) return; // 🚫 No more data, skip
-
-    var uri = Uri.parse(
-        '$typedServerUrl/api/attendance/my-attendance?page=$currentPage&search=$searchText');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token"
-    });
-
-    if (response.statusCode == 200) {
-      final results = List<Map<String, dynamic>>.from(
-          jsonDecode(response.body)['results'] ?? []);
-
+    if (_baseUrl.isEmpty || _token.isEmpty) {
+      if (!mounted) return;
       setState(() {
-        requestsMyAttendance.addAll(results);
-        requestsMyAttendance = requestsMyAttendance
-            .map((m) => jsonEncode(m))
-            .toSet()
-            .map((s) => jsonDecode(s) as Map<String, dynamic>)
-            .toList();
-        myAttendances = jsonDecode(response.body)['count'] ?? 0;
-        filteredMyAttendance = filterMyAttendance(searchText);
-        isLoading = false;
+        _isLoading = false;
+        _isRefreshing = false;
+        _error = 'Missing configuration. Please login again.';
+        _rows = [];
+        _summary = const MonthlyAttendanceSummary();
       });
-    }
-    else if (response.statusCode == 404) {
-      hasMoreMyAttendance = false;
       return;
     }
-  }
 
-  Future getAllNonValidatedAttendance({bool reset = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-
-    if (reset) {
-      currentPage = 1;
-      requestsNonValidAttendance.clear();
-      hasMoreNonValidated = true;
-    }
-    if (!hasMoreNonValidated) return;
-
-
-
-    var uri = Uri.parse(
-        '$typedServerUrl/api/attendance/attendance/list/non-validated?page=$currentPage&search=$searchText');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token"
-    });
-
-    if (response.statusCode == 200) {
-      final results = List<Map<String, dynamic>>.from(
-          jsonDecode(response.body)['results'] ?? []);
-
-
+    if (showLoader) {
       setState(() {
-        requestsNonValidAttendance.addAll(results);
-        requestsNonValidAttendance = requestsNonValidAttendance
-            .map((m) => jsonEncode(m))
-            .toSet()
-            .map((s) => jsonDecode(s) as Map<String, dynamic>)
-            .toList();
-        toValidate = jsonDecode(response.body)['count'] ?? 0;
-        filteredNonValidAttendance = filterNonValidAttendance(searchText);
-        isLoading = false;
+        _isLoading = true;
+        _error = null;
+      });
+    } else {
+      setState(() {
+        _isRefreshing = true;
+        _error = null;
       });
     }
-    else if (response.statusCode == 404) {
-      hasMoreNonValidated = false;
-      return;
-    }
-  }
 
-  Future getAllOvertimeAttendance({bool reset = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-
-    if (reset) {
-      currentPage = 1;
-      requestsOvertimeAttendance.clear();
-      hasMoreOvertime = true;
-    }
-    if (!hasMoreOvertime) return;
-
-    var uri = Uri.parse(
-        '$typedServerUrl/api/attendance/attendance/list/ot?page=$currentPage&search=$searchText');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token"
-    });
-
-    if (response.statusCode == 200) {
-      final results = List<Map<String, dynamic>>.from(
-          jsonDecode(response.body)['results'] ?? []);
-
-      setState(() {
-        requestsOvertimeAttendance.addAll(results);
-        requestsOvertimeAttendance = requestsOvertimeAttendance
-            .map((m) => jsonEncode(m))
-            .toSet()
-            .map((s) => jsonDecode(s) as Map<String, dynamic>)
-            .toList();
-        overtime = jsonDecode(response.body)['count'] ?? 0;
-        filteredOvertimeAttendance = filterOvertimeAttendance(searchText);
-        isLoading = false;
-      });
-    }
-    else if (response.statusCode == 404) {
-      hasMoreOvertime = false;
-      return;
-    }
-  }
-
-  Future getAllValidatedAttendance({bool reset = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-
-    if (reset) {
-      currentPage = 1;
-      requestsValidatedAttendance.clear();
-      hasMoreValidated = true;
-    }
-    if (!hasMoreValidated) return;
-    print('current page: $currentPage');
-
-
-    var uri = Uri.parse(
-        '$typedServerUrl/api/attendance/attendance/list/validated?page=$currentPage&search=$searchText');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token"
-    });
-
-    if (response.statusCode == 200) {
-      final results = List<Map<String, dynamic>>.from(
-          jsonDecode(response.body)['results'] ?? []);
-
-      setState(() {
-        requestsValidatedAttendance.addAll(results);
-        requestsValidatedAttendance = requestsValidatedAttendance
-            .map((m) => jsonEncode(m))
-            .toSet()
-            .map((s) => jsonDecode(s) as Map<String, dynamic>)
-            .toList();
-        validated = jsonDecode(response.body)['count'] ?? 0;
-        filteredValidatedAttendance = filterValidateRecords(searchText);
-        isLoading = false;
-      });
-    }
-    else if (response.statusCode == 404) {
-      hasMoreValidated = false;
-      return;
-    }
-  }
-
-
-  List<Map<String, dynamic>> filterNonValidAttendance(String searchText) {
-    if (searchText.isEmpty) {
-      return requestsNonValidAttendance;
-    } else {
-      return requestsNonValidAttendance.where((record) {
-        final firstName = record['employee_first_name']?.toString() ?? '';
-        final lastName = record['employee_last_name']?.toString() ?? '';
-        final fullName = (firstName + ' ' + lastName).toLowerCase();
-        return fullName.contains(searchText.toLowerCase());
-      }).toList();
-    }
-  }
-
-  List<Map<String, dynamic>> filterMyAttendance(String searchText) {
-    if (searchText.isEmpty) {
-      return requestsMyAttendance;
-    } else {
-      return requestsMyAttendance.where((record) {
-        final firstName = record['employee_first_name']?.toString() ?? '';
-        final lastName = record['employee_last_name']?.toString() ?? '';
-        final fullName = (firstName + ' ' + lastName).toLowerCase();
-        return fullName.contains(searchText.toLowerCase());
-      }).toList();
-    }
-  }
-
-  List<Map<String, dynamic>> filterOvertimeAttendance(String searchText) {
-    if (searchText.isEmpty) {
-      return requestsOvertimeAttendance;
-    } else {
-      return requestsOvertimeAttendance.where((record) {
-        final firstName = record['employee_first_name']?.toString() ?? '';
-        final lastName = record['employee_last_name']?.toString() ?? '';
-        final fullName = (firstName + ' ' + lastName).toLowerCase();
-        return fullName.contains(searchText.toLowerCase());
-      }).toList();
-    }
-  }
-
-  List<Map<String, dynamic>> filterValidateRecords(String searchText) {
-    if (searchText.isEmpty) {
-      return requestsValidatedAttendance;
-    } else {
-      return requestsValidatedAttendance.where((record) {
-        final firstName = record['employee_first_name']?.toString() ?? '';
-        final lastName = record['employee_last_name']?.toString() ?? '';
-        final fullName = (firstName + ' ' + lastName).toLowerCase();
-        return fullName.contains(searchText.toLowerCase());
-      }).toList();
-    }
-  }
-
-  void prefetchData() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var employeeId = prefs.getInt("employee_id");
-    var uri = Uri.parse('$typedServerUrl/api/employee/employees/$employeeId');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-
-    if (response.statusCode == 200) {
-      final responseData = jsonDecode(response.body);
-      arguments = {
-        'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
-        'badge_id': responseData['badge_id'],
-        'email': responseData['email'],
-        'phone': responseData['phone'],
-        'date_of_birth': responseData['dob'],
-        'gender': responseData['gender'],
-        'address': responseData['address'],
-        'country': responseData['country'],
-        'state': responseData['state'],
-        'city': responseData['city'],
-        'qualification': responseData['qualification'],
-        'experience': responseData['experience'],
-        'marital_status': responseData['marital_status'],
-        'children': responseData['children'],
-        'emergency_contact': responseData['emergency_contact'],
-        'emergency_contact_name': responseData['emergency_contact_name'],
-        'employee_work_info_id': responseData['employee_work_info_id'],
-        'employee_bank_details_id': responseData['employee_bank_details_id'],
-        'employee_profile': responseData['employee_profile']
-      };
-    }
-  }
-
-  Future permissionChecks() async {
-    if (_permissionsLoaded) return;
-
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
+    final month = _monthFormat.format(_selectedMonth);
 
     try {
-      var uri = Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-
-      if (response.statusCode == 200) {
-        setState(() {
-          _permissionOverview = true;   // ✅ Allowed
-          _permissionAttendance = true;
-          _permissionAttendanceRequest = true;
-          _permissionHourAccount = true;
-          _permissionsLoaded = true;
-        });
-      } else {
-        setState(() {
-          _permissionOverview = false;
-          _permissionAttendance = true;
-          _permissionAttendanceRequest = true;
-          _permissionHourAccount = true;
-          _permissionsLoaded = true;
-        });
+      final query = <String, String>{'month': month};
+      if (employeeId != null) {
+        query['employee_id'] = employeeId.toString();
       }
+      final uri = Uri.parse('$_baseUrl/api/attendance/attendances-recap/').replace(
+        queryParameters: query,
+      );
 
-      // Save to local storage
-      await prefs.setBool("perm_overview", _permissionOverview);
-      await prefs.setBool("perm_attendance", _permissionAttendance);
-      await prefs.setBool("perm_attendance_request", _permissionAttendanceRequest);
-      await prefs.setBool("perm_hour_account", _permissionHourAccount);
+      final res = await _safeGet(uri);
 
-    } catch (e) {
-      debugPrint('Error checking permissions: $e');
-      // On error, maybe hide Overview
-      setState(() {
-        _permissionOverview = false;
-        _permissionAttendance = true;
-        _permissionAttendanceRequest = true;
-        _permissionHourAccount = true;
-        _permissionsLoaded = true;
-      });
-    }
-  }
+      if (res != null && res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final List<dynamic> rowsJson = (decoded['rows'] as List?) ??
+            (decoded['results'] as List?) ??
+            (decoded['data'] as List?) ??
+            const [];
 
+        final rows = rowsJson
+            .whereType<Map<String, dynamic>>()
+            .map((e) => MonthlyAttendanceRow.fromJson(e))
+            .toList();
+        final summaryJson = decoded['summary'];
+        final summary = summaryJson is Map<String, dynamic>
+            ? MonthlyAttendanceSummary.fromJson(summaryJson)
+            : summaryJson is Map
+            ? MonthlyAttendanceSummary.fromJson(Map<String, dynamic>.from(summaryJson))
+            : const MonthlyAttendanceSummary();
 
-  void managerChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/employee/manager-check/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      managerCheck = true;
-    }
-  }
+        final employeeOptions = ((decoded['employee_options'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((item) => _EmployeeOption(
+                  id: int.tryParse((item['id'] ?? '').toString()) ?? 0,
+                  name: (item['name'] ?? '').toString().trim().isEmpty
+                      ? 'Employee #${item['id']}'
+                      : (item['name'] ?? '').toString(),
+                ))
+            .where((option) => option.id != 0)
+            .toList();
 
-  void attendanceTypeChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/attendance/attendance-type-check/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      print(response.body);
-      attendanceTypeCheck = true;
-    }
-  }
+        final dynamic rawSelectedEmployeeId = decoded['selected_employee_id'];
+        final int? selectedEmployeeId = rawSelectedEmployeeId is int
+            ? rawSelectedEmployeeId
+            : int.tryParse(rawSelectedEmployeeId?.toString() ?? '');
+        final showEmployeeFilter = decoded['show_employee_filter'] == true;
 
-  Future<void> getShiftDetails() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/base/employee-shift/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      setState(() {
-        for (var rec in jsonDecode(response.body)) {
-          String shift = "${rec['employee_shift']}";
-          String employeeId = "${rec['id']}";
-          shiftDetails.add(rec['employee_shift']);
-          shiftIdMap[shift] = employeeId;
-        }
-      });
-    }
-  }
-
-  Future<void> getEmployees() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-
-    employeeItems.clear();
-    employeeIdMap.clear();
-
-    for (var page = 1;; page++) {
-      print('Fetching employee page: $page');
-      var uri = Uri.parse('$typedServerUrl/api/employee/employee-selector?page=$page');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final results = data['results'];
-
-        // ✅ Break when no more employees are returned
-        if (results.isEmpty) break;
-
+        if (!mounted) return;
         setState(() {
-          for (var employee in results) {
-            final firstName = employee['employee_first_name'] ?? '';
-            final lastName = employee['employee_last_name'] ?? '';
-            final fullName = '$firstName $lastName'.trim();
-            final employeeId = "${employee['id']}";
-            employeeItems.add(fullName);
-            employeeIdMap[fullName] = employeeId;
+          _rows = rows;
+          _summary = summary;
+          _selectedEmployeeId = selectedEmployeeId;
+          _canSelectEmployee = showEmployeeFilter;
+          _employeeOptions
+            ..clear()
+            ..addAll(employeeOptions);
+          if (_employeeOptions.isEmpty && _currentEmployeeId != null) {
+            _employeeOptions.add(
+              _EmployeeOption(
+                id: _currentEmployeeId!,
+                name: _currentEmployeeName.isEmpty
+                    ? 'Employee #$_currentEmployeeId'
+                    : _currentEmployeeName,
+              ),
+            );
           }
+          final selected = _employeeOptions.cast<_EmployeeOption?>().firstWhere(
+                (option) => option?.id == _selectedEmployeeId,
+                orElse: () => null,
+              );
+          _employeeController.text = selected?.name ?? _currentEmployeeName;
+          _isLoading = false;
+          _isRefreshing = false;
+          _error = null;
         });
       } else {
-        print("Error fetching employees: ${response.statusCode}");
-        break;
+        final msg = res == null ? 'Request timeout / network error' : 'Failed to load (HTTP ${res.statusCode})';
+        if (!mounted) return;
+        setState(() {
+          _rows = [];
+          _summary = const MonthlyAttendanceSummary();
+          _isLoading = false;
+          _isRefreshing = false;
+          _error = msg;
+        });
+        _showSnack(msg);
       }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _rows = [];
+        _summary = const MonthlyAttendanceSummary();
+        _isLoading = false;
+        _isRefreshing = false;
+        _error = 'Error: $e';
+      });
+      _showSnack('Failed to load data');
     }
   }
 
-  Future<void> createNewAttendance(Map<String, dynamic> createdDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/attendance/attendance/');
-    String employeeIdString = createdDetails['employee_id'];
-    employeeIdString.split(',');
-    var response = await http.post(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        "employee_id": createdDetails['employee_id'],
-        "attendance_date": createdDetails['attendance_date'],
-        "shift_id": createdDetails['shift_id'],
-        "attendance_clock_in_date": createdDetails['attendance_clock_in_date'],
-        "attendance_clock_in": createdDetails['attendance_clock_in'],
-        "attendance_clock_out_date":
-        createdDetails['attendance_clock_out_date'],
-        "attendance_clock_out": createdDetails['attendance_clock_out'],
-        "attendance_worked_hour": createdDetails['attendance_worked_hour'],
-        "minimum_hour": createdDetails['minimum_hour'],
-      }),
-    );
 
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      _errorMessage = null;
-      createAttendance = true;
-      currentPage = 0;
-      getMyAttendance();
-      getAllNonValidatedAttendance();
-      getAllOvertimeAttendance();
-      getAllValidatedAttendance();
-      setState(() {});
-    } else {
-      isSaveClick = true;
-      var responseData = jsonDecode(response.body);
-      if (responseData.containsKey('non_field_errors')) {
-        _errorMessage = responseData['non_field_errors'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_date')) {
-        _errorMessage = responseData['attendance_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_in_date')) {
-        _errorMessage = responseData['attendance_clock_in_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_in')) {
-        _errorMessage = responseData['attendance_clock_in'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_out_date')) {
-        _errorMessage = responseData['attendance_clock_out_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_out')) {
-        _errorMessage = responseData['attendance_clock_out'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_worked_hour')) {
-        _errorMessage = responseData['attendance_worked_hour'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('minimum_hour')) {
-        _errorMessage = responseData['minimum_hour'].join('\n');
-        setState(() {});
-      }
-      setState(() {});
-    }
-  }
+  Future<void> _exportMonthlyAttendancePdf() async {
+    if (_isExporting) return;
 
-  Future<void> updateAttendance(Map<String, dynamic> updatedDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    String attendanceId = updatedDetails['id'].toString();
-    var uri =
-    Uri.parse('$typedServerUrl/api/attendance/attendance/$attendanceId');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        "employee_id": updatedDetails['employee_id'],
-        "attendance_date": updatedDetails['attendance_date'],
-        "shift_id": updatedDetails['shift_id'],
-        "attendance_clock_in_date": updatedDetails['attendance_clock_in_date'],
-        "attendance_clock_in": updatedDetails['attendance_clock_in'],
-        "attendance_clock_out_date":
-        updatedDetails['attendance_clock_out_date'],
-        "attendance_clock_out": updatedDetails['attendance_clock_out'],
-        "attendance_worked_hour": updatedDetails['attendance_worked_hour'],
-        "minimum_hour": updatedDetails['minimum_hour'],
-      }),
-    );
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      _errorMessage = null;
-      currentPage = 0;
-      getMyAttendance();
-      getAllNonValidatedAttendance();
-      getAllOvertimeAttendance();
-      setState(() {});
-    } else {
-      isSaveClick = true;
-      var responseData = jsonDecode(response.body);
-      if (responseData.containsKey('non_field_errors')) {
-        _errorMessage = responseData['non_field_errors'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_date')) {
-        _errorMessage = responseData['attendance_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_in_date')) {
-        _errorMessage = responseData['attendance_clock_in_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_in')) {
-        _errorMessage = responseData['attendance_clock_in'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_out_date')) {
-        _errorMessage = responseData['attendance_clock_out_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_out')) {
-        _errorMessage = responseData['attendance_clock_out'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_worked_hour')) {
-        _errorMessage = responseData['attendance_worked_hour'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('minimum_hour')) {
-        _errorMessage = responseData['minimum_hour'].join('\n');
-        setState(() {});
-      }
-      setState(() {});
+    final employeeId = _selectedEmployeeId;
+    if (_baseUrl.isEmpty || _token.isEmpty) {
+      _showSnack('Missing configuration. Please login again.');
+      return;
     }
-  }
 
-  Future<void> updateOvertimeAttendance(
-      Map<String, dynamic> updatedDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    String attendanceId = updatedDetails['id'].toString();
-    var uri =
-    Uri.parse('$typedServerUrl/api/attendance/attendance/$attendanceId');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        "employee_id": updatedDetails['employee_id'],
-        "attendance_date": updatedDetails['attendance_date'],
-        "shift_id": updatedDetails['shift_id'],
-        "attendance_clock_in_date": updatedDetails['attendance_clock_in_date'],
-        "attendance_clock_in": updatedDetails['attendance_clock_in'],
-        "attendance_clock_out_date":
-        updatedDetails['attendance_clock_out_date'],
-        "attendance_clock_out": updatedDetails['attendance_clock_out'],
-        "attendance_worked_hour": updatedDetails['attendance_worked_hour'],
-        "minimum_hour": updatedDetails['minimum_hour'],
-      }),
-    );
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      _errorMessage = null;
-      currentPage = 0;
-      getAllOvertimeAttendance();
-      setState(() {});
-    } else {
-      isSaveClick = true;
-      var responseData = jsonDecode(response.body);
-      if (responseData.containsKey('non_field_errors')) {
-        _errorMessage = responseData['non_field_errors'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_date')) {
-        _errorMessage = responseData['attendance_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_in_date')) {
-        _errorMessage = responseData['attendance_clock_in_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_in')) {
-        _errorMessage = responseData['attendance_clock_in'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_out_date')) {
-        _errorMessage = responseData['attendance_clock_out_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_clock_out')) {
-        _errorMessage = responseData['attendance_clock_out'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('attendance_worked_hour')) {
-        _errorMessage = responseData['attendance_worked_hour'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('minimum_hour')) {
-        _errorMessage = responseData['minimum_hour'].join('\n');
-        setState(() {});
-      }
-      setState(() {});
-    }
-  }
-
-  Future<void> deleteAttendance(Map<String, dynamic> deletedDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    String attendanceId = deletedDetails['id'].toString();
-    var uri =
-    Uri.parse('$typedServerUrl/api/attendance/attendance/$attendanceId');
-    var response = await http.delete(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      currentPage = 0;
-      getAllOvertimeAttendance();
-      setState(() {});
-    }
-    else {
-      isSaveClick = true;
-    }
-  }
-
-  Future<void> deleteNonValidatedAttendance(
-      Map<String, dynamic> deletedDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    String attendanceId = deletedDetails['id'].toString();
-    var uri =
-    Uri.parse('$typedServerUrl/api/attendance/attendance/$attendanceId');
-    var response = await http.delete(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      currentPage = 0;
-      getMyAttendance();
-      getAllNonValidatedAttendance();
-      setState(() {});
-      showDeleteAnimation();
-    }
-    else {
-      isSaveClick = true;
-    }
-  }
-
-  Future<void> validateAttendance(Map<String, dynamic> deletedDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    String attendanceId = deletedDetails['id'].toString();
-    var uri = Uri.parse(
-        '$typedServerUrl/api/attendance/attendance-validate/$attendanceId');
-    var response = await http.put(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      currentPage = 0;
-      getAllNonValidatedAttendance();
-      setState(() {});
-    }
-    else {
-      isSaveClick = true;
-    }
-  }
-
-  Future<void> validateOverTime(Map<String, dynamic> deletedDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    String attendanceId = deletedDetails['id'].toString();
-    var uri = Uri.parse(
-        '$typedServerUrl/api/attendance/overtime-approve/$attendanceId');
-    var response = await http.put(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      isSaveClick = false;
-      currentPage = 0;
-      getAllOvertimeAttendance();
-      setState(() {});
-    }
-    else {
-      isSaveClick = true;
-    }
-  }
-
-  Future<String?> showCustomDatePicker(
-      BuildContext context, DateTime initialDate) async {
-    final selectedDate = await showDatePicker(
+    final lang = await showDialog<String>(
       context: context,
-      initialDate: initialDate,
-      firstDate: DateTime(2000),
-      lastDate: DateTime(2100),
-      builder: (BuildContext context, Widget? child) {
-        return Theme(
-          data: ThemeData.light().copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Colors.blue,
-            ),
+      builder: (context) => AlertDialog(
+        title: const Text('Export PDF'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            Text('Choose language'),
+            SizedBox(height: 12),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop('en'),
+            child: const Text('English'),
           ),
-          child: child!,
-        );
-      },
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop('id'),
+            child: const Text('Indonesian'),
+          ),
+        ],
+      ),
     );
 
-    if (selectedDate != null) {
-      return "${selectedDate.year}-${selectedDate.month}-${selectedDate.day}";
+    if (lang == null) return;
+
+    if (!mounted) return;
+    setState(() {
+      _isExporting = true;
+    });
+
+    _showExportProgressDialog();
+    var progressShown = true;
+
+    final month = _monthFormat.format(_selectedMonth);
+    try {
+      final uri = Uri.parse(
+        '$_baseUrl/api/attendance/attendances-recap/export-pdf/?employee_id=$employeeId&month=$month&lang=$lang',
+      );
+
+      final res = await http.get(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $_token',
+        },
+      ).timeout(const Duration(seconds: 30));
+
+      if (!mounted) return;
+      if (progressShown) {
+        Navigator.of(context, rootNavigator: true).pop();
+        progressShown = false;
+      }
+
+      if (res.statusCode == 200) {
+        if (res.bodyBytes.isEmpty) {
+          _showSnack('Downloaded file is empty');
+          return;
+        }
+
+        final file = await _saveExportedPdf(
+          bytes: res.bodyBytes,
+          month: month,
+          employeeId: employeeId ?? _currentEmployeeId ?? 0,
+          lang: lang,
+        );
+
+        if (!mounted) return;
+        await _showExportReadyDialog(file);
+        return;
+      }
+
+      _showSnack(_exportErrorMessage(res.statusCode));
+    } on TimeoutException {
+      if (mounted) {
+        if (progressShown) {
+          Navigator.of(context, rootNavigator: true).pop();
+          progressShown = false;
+        }
+        _showSnack('Download timeout. Please try again.');
+      }
+    } catch (_) {
+      if (mounted) {
+        if (progressShown) {
+          Navigator.of(context, rootNavigator: true).pop();
+          progressShown = false;
+        }
+        _showSnack('Failed to download PDF');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+        });
+      }
     }
-    return null;
   }
 
-  void _showValidateAttendance(
-      BuildContext context, Map<String, dynamic> record) {
-    TextEditingController editCheckInDateController =
-    TextEditingController(text: record['attendance_clock_in_date']);
-    TextEditingController editCheckInHoursController =
-    TextEditingController(text: record['attendance_clock_in']);
-    TextEditingController editCheckOutDateController =
-    TextEditingController(text: record['attendance_clock_out_date']);
-    TextEditingController editCheckOutHoursController =
-    TextEditingController(text: record['attendance_clock_out']);
-    TextEditingController editWorkedHoursController =
-    TextEditingController(text: record['attendance_worked_hour']);
-    TextEditingController editMinimumHourController =
-    TextEditingController(text: record['minimum_hour']);
-    TextEditingController editAttendanceDateController =
-    TextEditingController(text: record['attendance_date']);
-    TextEditingController typeAheadEditShiftController =
-    TextEditingController(text: record['shift_name']);
-    _typeAheadController.text = (record['employee_first_name'] ?? "") +
-        " " +
-        (record['employee_last_name'] ?? "");
-    showDialog(
+  void _showExportProgressDialog() {
+    showDialog<void>(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setState) {
-            return Stack(
-              children: [
-                AlertDialog(
-                  backgroundColor: Colors.white,
-                  title: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Edit Attendance",
-                        style: TextStyle(
-                            fontSize: 21,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                        },
-                      ),
-                    ],
-                  ),
-                  content: SizedBox(
-                    width: MediaQuery.of(context).size.width * 0.95,
-                    height: MediaQuery.of(context).size.height * 0.50,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (_errorMessage != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(
-                                _errorMessage ?? '',
-                                style: const TextStyle(
-                                    color: Colors.red,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            'Employee',
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: _typeAheadController,
-                              decoration: InputDecoration(
-                                labelText: 'Search Employee',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10.0),
-                                border: const OutlineInputBorder(),
-                              ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return employeeItems
-                                  .where((item) => item
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                editEmployee = suggestion;
-                                selectedEditEmployeeId =
-                                employeeIdMap[suggestion];
-                                _validateEmployee = false;
-                              });
-                              _typeAheadController.text = suggestion;
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Employees Found',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            "Attendance Date",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TextField(
-                            readOnly: true,
-                            controller: editAttendanceDateController,
-                            onTap: () async {
-                              final selectedDate = await showCustomDatePicker(
-                                  context, DateTime.now());
-                              if (selectedDate != null) {
-                                DateTime parsedDate = DateFormat('yyyy-MM-dd')
-                                    .parse(selectedDate);
-                                setState(() {
-                                  editAttendanceDateController.text =
-                                      DateFormat('yyyy-MM-dd')
-                                          .format(parsedDate);
-                                  _editValidateDate = false;
-                                });
-                              }
-                            },
-                            decoration: InputDecoration(
-                              border: const OutlineInputBorder(),
-                              errorText: _editValidateDate
-                                  ? 'Please select a Attendance date'
-                                  : null,
-                              contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 10.0),
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            "Shift",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: typeAheadEditShiftController,
-                              decoration: InputDecoration(
-                                labelText: 'Search Shift',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10.0),
-                              ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return shiftDetails
-                                  .where((item) => item
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                editShift = suggestion;
-                                selectedEditShiftId = shiftIdMap[suggestion];
-                              });
-                              typeAheadEditShiftController.text = suggestion;
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Shift Found',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-In Date',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      readOnly: true,
-                                      controller: editCheckInDateController,
-                                      onTap: () async {
-                                        final selectedDate =
-                                        await showCustomDatePicker(
-                                            context, DateTime.now());
-                                        if (selectedDate != null) {
-                                          DateTime parsedDate =
-                                          DateFormat('yyyy-MM-dd')
-                                              .parse(selectedDate);
-                                          setState(() {
-                                            editCheckInDateController.text =
-                                                DateFormat('yyyy-MM-dd')
-                                                    .format(parsedDate);
-                                          });
-                                        }
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-In',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editCheckInHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editCheckInHoursSpent = valueTime;
-                                      },
-                                      decoration: InputDecoration(
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        prefixIcon: IconButton(
-                                          icon: const Icon(Icons.access_time),
-                                          onPressed: () async {
-                                            final TimeOfDay? picked =
-                                            await showTimePicker(
-                                              context: context,
-                                              initialTime: TimeOfDay.now(),
-                                            );
-                                            if (picked != null) {
-                                              editCheckInHoursController.text =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                              editCheckInHoursSpent =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                            }
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-Out Date',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      readOnly: true,
-                                      controller: editCheckOutDateController,
-                                      onTap: () async {
-                                        final selectedDate =
-                                        await showCustomDatePicker(
-                                            context, DateTime.now());
-                                        if (selectedDate != null) {
-                                          DateTime parsedDate =
-                                          DateFormat('yyyy-MM-dd')
-                                              .parse(selectedDate);
-                                          setState(() {
-                                            editCheckOutDateController.text =
-                                                DateFormat('yyyy-MM-dd')
-                                                    .format(parsedDate);
-                                          });
-                                        }
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-Out',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editCheckOutHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editCheckOutHoursSpent = valueTime;
-                                      },
-                                      decoration: InputDecoration(
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        prefixIcon: IconButton(
-                                          icon: const Icon(Icons.access_time),
-                                          onPressed: () async {
-                                            final TimeOfDay? picked =
-                                            await showTimePicker(
-                                              context: context,
-                                              initialTime: TimeOfDay.now(),
-                                            );
-                                            if (picked != null) {
-                                              editCheckOutHoursController.text =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                              editCheckOutHoursSpent =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                            }
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Working Hours',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editWorkedHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editWorkHoursSpent = valueTime;
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Minimum Hour',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editMinimumHourController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editMinimumHoursSpent = valueTime;
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  actions: <Widget>[
-                    SizedBox(
-                      width: double.infinity,
-                      child: TextButton(
-                        onPressed: () async {
-                          if (isSaveClick == true) {
-                            isSaveClick = false;
-                            setState(() {
-                              _errorMessage = null;
-                            });
-                            if (editAttendanceDateController.text.isEmpty) {
-                              setState(() {
-                                isSaveClick = true;
-                                _editValidateDate = true;
-                                Navigator.of(context).pop(true);
-                                _showValidateAttendance(context, record);
-                              });
-                            } else {
-                              isAction = true;
-                              Map<String, dynamic> updatedDetails = {
-                                'id': record['id'],
-                                "employee_id": selectedEditEmployeeId ??
-                                    record['employee_id'].toString(),
-                                "attendance_date":
-                                editAttendanceDateController.text,
-                                'shift_id': selectedEditShiftId ??
-                                    record['shift_id'].toString(),
-                                'attendance_clock_in_date':
-                                editCheckInDateController.text.isEmpty
-                                    ? record['attendance_clock_in_date']
-                                    : editCheckInDateController.text,
-                                'attendance_clock_in':
-                                editCheckInHoursSpent.isEmpty
-                                    ? record['attendance_clock_in']
-                                    : editCheckInHoursSpent,
-                                'attendance_clock_out_date':
-                                editCheckOutDateController.text.isEmpty
-                                    ? record['attendance_clock_out_date']
-                                    : editCheckOutDateController.text,
-                                'attendance_clock_out':
-                                editCheckOutHoursSpent.isEmpty
-                                    ? record['attendance_clock_out']
-                                    : editCheckOutHoursSpent,
-                                'attendance_worked_hour':
-                                editWorkHoursSpent.isEmpty
-                                    ? record['attendance_worked_hour']
-                                    : editWorkHoursSpent,
-                                'minimum_hour': editMinimumHoursSpent.isEmpty
-                                    ? record['minimum_hour']
-                                    : editMinimumHoursSpent,
-                              };
-                              await updateAttendance(updatedDetails);
-                              setState(() {
-                                isAction = false;
-                              });
-                              if (_errorMessage == null ||
-                                  _errorMessage!.isEmpty) {
-                                Navigator.of(context).pop(true);
-                                showUpdateAnimation();
-                              } else {
-                                Navigator.of(context).pop(true);
-                                _showValidateAttendance(context, record);
-                              }
-                            }
-                          }
-                        },
-                        style: ButtonStyle(
-                          backgroundColor:
-                          MaterialStateProperty.all<Color>(Colors.red),
-                          shape:
-                          MaterialStateProperty.all<RoundedRectangleBorder>(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6.0),
-                            ),
-                          ),
-                        ),
-                        child: const Text('Save',
-                            style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-                if (isAction)
-                  const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-              ],
-            );
-          },
-        );
-      },
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Text('Downloading PDF...'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
-  void _showValidateOvertimeAttendance(
-      BuildContext context, Map<String, dynamic> record) {
-    TextEditingController editCheckInDateController =
-    TextEditingController(text: record['attendance_clock_in_date']);
-    TextEditingController editCheckInHoursController =
-    TextEditingController(text: record['attendance_clock_in']);
-    TextEditingController editCheckOutDateController =
-    TextEditingController(text: record['attendance_clock_out_date']);
-    TextEditingController editCheckOutHoursController =
-    TextEditingController(text: record['attendance_clock_out']);
-    TextEditingController editWorkedHoursController =
-    TextEditingController(text: record['attendance_worked_hour']);
-    TextEditingController editMinimumHourController =
-    TextEditingController(text: record['minimum_hour']);
-    TextEditingController editAttendanceDateController =
-    TextEditingController(text: record['attendance_date']);
-    TextEditingController typeAheadEditShiftController =
-    TextEditingController(text: record['shift_name']);
-    _typeAheadController.text = (record['employee_first_name'] ?? "") +
-        " " +
-        (record['employee_last_name'] ?? "");
-    showDialog(
+  Future<File> _saveExportedPdf({
+    required List<int> bytes,
+    required String month,
+    required int employeeId,
+    required String lang,
+  }) async {
+    final safeMonth = month.replaceAll(RegExp(r'[^0-9-]'), '_');
+    final fileName =
+        'monthly_attendance_${employeeId}_${safeMonth}_${lang}_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    final directory = Directory.systemTemp;
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+
+    final file = File('${directory.path}/$fileName');
+    await file.writeAsBytes(bytes, flush: true);
+    return file;
+  }
+
+  Future<void> _showExportReadyDialog(File file) async {
+    if (!mounted) return;
+
+    await showDialog<void>(
       context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setState) {
-            return Stack(
-              children: [
-                AlertDialog(
-                  backgroundColor: Colors.white,
-                  title: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Edit Attendance",
-                        style: TextStyle(
-                            fontSize: 21,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                        },
-                      ),
-                    ],
-                  ),
-                  content: SizedBox(
-                    width: MediaQuery.of(context).size.width * 0.95,
-                    height: MediaQuery.of(context).size.height * 0.50,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (_errorMessage != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(
-                                _errorMessage ?? '',
-                                style: const TextStyle(
-                                    color: Colors.red,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            'Employee',
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: _typeAheadController,
-                              decoration: InputDecoration(
-                                labelText: 'Search Employee',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10.0),
-                                border: const OutlineInputBorder(),
-                              ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return employeeItems
-                                  .where((item) => item
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                editEmployee = suggestion;
-                                selectedEditEmployeeId =
-                                employeeIdMap[suggestion];
-                                _validateEmployee = false;
-                              });
-                              _typeAheadController.text = suggestion;
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Employees Found',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            "Attendance Date",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TextField(
-                            readOnly: true,
-                            controller: editAttendanceDateController,
-                            onTap: () async {
-                              final selectedDate = await showCustomDatePicker(
-                                  context, DateTime.now());
-                              if (selectedDate != null) {
-                                DateTime parsedDate = DateFormat('yyyy-MM-dd')
-                                    .parse(selectedDate);
-                                setState(() {
-                                  editAttendanceDateController.text =
-                                      DateFormat('yyyy-MM-dd')
-                                          .format(parsedDate);
-                                  _editValidateDate = false;
-                                });
-                              }
-                            },
-                            decoration: InputDecoration(
-                              border: const OutlineInputBorder(),
-                              errorText: _editValidateDate
-                                  ? 'Please select a Attendance date'
-                                  : null,
-                              contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 10.0),
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            "Shift",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: typeAheadEditShiftController,
-                              decoration: InputDecoration(
-                                labelText: 'Search Shift',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10.0),
-                              ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return shiftDetails
-                                  .where((item) => item
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                editShift = suggestion;
-                                selectedEditShiftId = shiftIdMap[suggestion];
-                              });
-                              typeAheadEditShiftController.text = suggestion;
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Shift Found',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-In Date',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      readOnly: true,
-                                      controller: editCheckInDateController,
-                                      onTap: () async {
-                                        final selectedDate =
-                                        await showCustomDatePicker(
-                                            context, DateTime.now());
-                                        if (selectedDate != null) {
-                                          DateTime parsedDate =
-                                          DateFormat('yyyy-MM-dd')
-                                              .parse(selectedDate);
-                                          setState(() {
-                                            editCheckInDateController.text =
-                                                DateFormat('yyyy-MM-dd')
-                                                    .format(parsedDate);
-                                          });
-                                        }
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-In',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editCheckInHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editCheckInHoursSpent = valueTime;
-                                      },
-                                      decoration: InputDecoration(
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        prefixIcon: IconButton(
-                                          icon: const Icon(Icons.access_time),
-                                          onPressed: () async {
-                                            final TimeOfDay? picked =
-                                            await showTimePicker(
-                                              context: context,
-                                              initialTime: TimeOfDay.now(),
-                                            );
-                                            if (picked != null) {
-                                              editCheckInHoursController.text =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                              editCheckInHoursSpent =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                            }
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-Out Date',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      readOnly: true,
-                                      controller: editCheckOutDateController,
-                                      onTap: () async {
-                                        final selectedDate =
-                                        await showCustomDatePicker(
-                                            context, DateTime.now());
-                                        if (selectedDate != null) {
-                                          DateTime parsedDate =
-                                          DateFormat('yyyy-MM-dd')
-                                              .parse(selectedDate);
-                                          setState(() {
-                                            editCheckOutDateController.text =
-                                                DateFormat('yyyy-MM-dd')
-                                                    .format(parsedDate);
-                                          });
-                                        }
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-Out',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editCheckOutHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editCheckOutHoursSpent = valueTime;
-                                      },
-                                      decoration: InputDecoration(
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        prefixIcon: IconButton(
-                                          icon: const Icon(Icons.access_time),
-                                          onPressed: () async {
-                                            final TimeOfDay? picked =
-                                            await showTimePicker(
-                                              context: context,
-                                              initialTime: TimeOfDay.now(),
-                                            );
-                                            if (picked != null) {
-                                              editCheckOutHoursController.text =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                              editCheckOutHoursSpent =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                            }
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Working Hours',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editWorkedHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editWorkHoursSpent = valueTime;
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Minimum Hour',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: editMinimumHourController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        editMinimumHoursSpent = valueTime;
-                                      },
-                                      decoration: const InputDecoration(
-                                        border: OutlineInputBorder(),
-                                        contentPadding: EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  actions: <Widget>[
-                    SizedBox(
-                      width: double.infinity,
-                      child: TextButton(
-                        onPressed: () async {
-                          if (isSaveClick == true) {
-                            isSaveClick = false;
-                            setState(() {
-                              _errorMessage = null;
-                              isAction = true;
-                            });
-                            if (editAttendanceDateController.text.isEmpty) {
-                              setState(() {
-                                isSaveClick = true;
-                                _editValidateDate = true;
-                                Navigator.of(context).pop(true);
-                                _showValidateOvertimeAttendance(
-                                    context, record);
-                              });
-                            } else {
-                              Map<String, dynamic> updatedDetails = {
-                                'id': record['id'],
-                                "employee_id": selectedEditEmployeeId ??
-                                    record['employee_id'].toString(),
-                                "attendance_date":
-                                editAttendanceDateController.text,
-                                'shift_id': selectedEditShiftId ??
-                                    record['shift_id'].toString(),
-                                'attendance_clock_in_date':
-                                editCheckInDateController.text.isEmpty
-                                    ? record['attendance_clock_in_date']
-                                    : editCheckInDateController.text,
-                                'attendance_clock_in':
-                                editCheckInHoursSpent.isEmpty
-                                    ? record['attendance_clock_in']
-                                    : editCheckInHoursSpent,
-                                'attendance_clock_out_date':
-                                editCheckOutDateController.text.isEmpty
-                                    ? record['attendance_clock_out_date']
-                                    : editCheckOutDateController.text,
-                                'attendance_clock_out':
-                                editCheckOutHoursSpent.isEmpty
-                                    ? record['attendance_clock_out']
-                                    : editCheckOutHoursSpent,
-                                'attendance_worked_hour':
-                                editWorkHoursSpent.isEmpty
-                                    ? record['attendance_worked_hour']
-                                    : editWorkHoursSpent,
-                                'minimum_hour': editMinimumHoursSpent.isEmpty
-                                    ? record['minimum_hour']
-                                    : editMinimumHoursSpent,
-                              };
-                              await updateOvertimeAttendance(updatedDetails);
-                              setState(() {
-                                isAction = false;
-                              });
-                              if (_errorMessage == null ||
-                                  _errorMessage!.isEmpty) {
-                                Navigator.of(context).pop(true);
-                                showUpdateAnimation();
-                              } else {
-                                Navigator.of(context).pop(true);
-                                _showValidateOvertimeAttendance(
-                                    context, record);
-                              }
-                            }
-                          }
-                        },
-                        style: ButtonStyle(
-                          backgroundColor:
-                          MaterialStateProperty.all<Color>(Colors.red),
-                          shape:
-                          MaterialStateProperty.all<RoundedRectangleBorder>(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6.0),
-                            ),
-                          ),
-                        ),
-                        child: const Text('Save',
-                            style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-                if (isAction)
-                  const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (context) => AlertDialog(
+        title: const Text('PDF ready'),
+        content: Text(file.path.split(Platform.pathSeparator).last),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await _shareExportedPdf(file);
+            },
+            child: const Text('Share'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              final opened = await _openExportedPdf(file);
+              if (!opened) {
+                _showSnack('Unable to open PDF');
+              }
+            },
+            icon: const Icon(Icons.picture_as_pdf),
+            label: const Text('Open PDF'),
+          ),
+        ],
+      ),
     );
   }
 
-  void showCreateAttendanceDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (BuildContext context, StateSetter setState) {
-            return Stack(
-              children: [
-                AlertDialog(
-                  backgroundColor: Colors.white,
-                  title: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const Text(
-                        "Add Attendance",
-                        style: TextStyle(
-                            fontWeight: FontWeight.bold, color: Colors.black),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                        },
-                      ),
-                    ],
-                  ),
-                  content: SizedBox(
-                    height: MediaQuery.of(context).size.height * 0.5,
-                    width: MediaQuery.of(context).size.width * 0.95,
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (_errorMessage != null)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(
-                                _errorMessage ?? '',
-                                style: const TextStyle(
-                                    color: Colors.red,
-                                    fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            'Employee',
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: _typeAheadCreateController,
-                              decoration: InputDecoration(
-                                labelText: 'Search Employee',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10.0),
-                                errorText: _validateEmployee
-                                    ? 'Please Select an Employee'
-                                    : null,
-                              ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return employeeItems
-                                  .where((item) => item
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                createEmployee = suggestion;
-                                selectedEmployeeId = employeeIdMap[suggestion];
-                                _validateEmployee = false;
-                              });
-                              _typeAheadCreateController.text = suggestion;
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Employees Found',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            "Attendance Date",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TextField(
-                            readOnly: true,
-                            controller: attendanceDateController,
-                            onTap: () async {
-                              final selectedDate = await showCustomDatePicker(
-                                  context, DateTime.now());
-                              if (selectedDate != null) {
-                                DateTime parsedDate = DateFormat('yyyy-MM-dd')
-                                    .parse(selectedDate);
-                                setState(() {
-                                  attendanceDateController.text =
-                                      DateFormat('yyyy-MM-dd')
-                                          .format(parsedDate);
-                                });
-                              }
-                            },
-                            decoration: InputDecoration(
-                              labelText: "Attendance Date",
-                              labelStyle: TextStyle(color: Colors.grey[350]),
-                              border: const OutlineInputBorder(),
-                              errorText: _validateDate
-                                  ? 'Please select a Attendance date'
-                                  : null,
-                              contentPadding:
-                              const EdgeInsets.symmetric(horizontal: 10.0),
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          const Text(
-                            "Shift",
-                            style: TextStyle(color: Colors.black),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: _typeAheadCreateShiftController,
-                              decoration: InputDecoration(
-                                labelText: 'Search Shift',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                border: const OutlineInputBorder(),
-                                contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 10.0),
-                                errorText: _validateShift
-                                    ? 'Please Select a Shift'
-                                    : null,
-                              ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return shiftDetails
-                                  .where((item) => item
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                createShift = suggestion;
-                                selectedShiftId = shiftIdMap[suggestion];
-                                _validateShift = false;
-                              });
-                              _typeAheadCreateShiftController.text = suggestion;
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Shift Found',
-                                style: TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
-                            ),
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-In Date',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      readOnly: true,
-                                      controller: checkInDateController,
-                                      onTap: () async {
-                                        final selectedDate =
-                                        await showCustomDatePicker(
-                                            context, DateTime.now());
-                                        if (selectedDate != null) {
-                                          DateTime parsedDate =
-                                          DateFormat('yyyy-MM-dd')
-                                              .parse(selectedDate);
-                                          setState(() {
-                                            checkInDateController.text =
-                                                DateFormat('yyyy-MM-dd')
-                                                    .format(parsedDate);
-                                            _validateCheckInDate = false;
-                                          });
-                                        }
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: "Check-In Date",
-                                        labelStyle:
-                                        TextStyle(color: Colors.grey[350]),
-                                        border: const OutlineInputBorder(),
-                                        errorText: _validateCheckInDate
-                                            ? 'Please Choose Check-In Date'
-                                            : null,
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-In',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: checkInHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        checkInHoursSpent = valueTime;
-                                        _validateCheckIn = false;
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: '00:00',
-                                        labelStyle:
-                                        TextStyle(color: Colors.grey[350]),
-                                        border: const OutlineInputBorder(),
-                                        errorText: _validateCheckIn
-                                            ? 'Please Choose a Check-In'
-                                            : null,
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        prefixIcon: IconButton(
-                                          icon: const Icon(Icons.access_time),
-                                          onPressed: () async {
-                                            final TimeOfDay? picked =
-                                            await showTimePicker(
-                                              context: context,
-                                              initialTime: TimeOfDay.now(),
-                                            );
-                                            if (picked != null) {
-                                              checkInHoursController.text =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                              checkInHoursSpent =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                            }
-                                            _validateCheckIn = false;
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-Out Date',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      readOnly: true,
-                                      controller: checkOutDateController,
-                                      onTap: () async {
-                                        final selectedDate =
-                                        await showCustomDatePicker(
-                                            context, DateTime.now());
-                                        if (selectedDate != null) {
-                                          DateTime parsedDate =
-                                          DateFormat('yyyy-MM-dd')
-                                              .parse(selectedDate);
-                                          setState(() {
-                                            checkOutDateController.text =
-                                                DateFormat('yyyy-MM-dd')
-                                                    .format(parsedDate);
-                                            _validateCheckOutDate = false;
-                                          });
-                                        }
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: "Check-Out Date",
-                                        errorText: _validateCheckOutDate
-                                            ? 'Please Choose a Check-Out Date'
-                                            : null,
-                                        labelStyle:
-                                        TextStyle(color: Colors.grey[350]),
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Check-Out',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: checkoutHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        checkOutHoursSpent = valueTime;
-                                        _validateCheckOut = false;
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: '00:00',
-                                        labelStyle:
-                                        TextStyle(color: Colors.grey[350]),
-                                        border: const OutlineInputBorder(),
-                                        errorText: _validateCheckOut
-                                            ? 'Please Choose a Check-Out'
-                                            : null,
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        prefixIcon: IconButton(
-                                          icon: const Icon(Icons.access_time),
-                                          onPressed: () async {
-                                            final TimeOfDay? picked =
-                                            await showTimePicker(
-                                              context: context,
-                                              initialTime: TimeOfDay.now(),
-                                            );
-                                            if (picked != null) {
-                                              checkoutHoursController.text =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                              checkOutHoursSpent =
-                                              '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
-                                            }
-                                            _validateCheckOut = false;
-                                          },
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.03),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Working Hours',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: workedHoursController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        workHoursSpent = valueTime;
-                                        _validateWorkingHours = false;
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: '00:00',
-                                        labelStyle:
-                                        TextStyle(color: Colors.grey[350]),
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        errorText: _validateWorkingHours
-                                            ? 'Please add Working Hours'
-                                            : null,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.03),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Minimum Hour',
-                                      style: TextStyle(color: Colors.black),
-                                    ),
-                                    SizedBox(
-                                        height:
-                                        MediaQuery.of(context).size.height *
-                                            0.01),
-                                    TextField(
-                                      controller: minimumHourController,
-                                      keyboardType: TextInputType.datetime,
-                                      inputFormatters: [
-                                        FilteringTextInputFormatter.digitsOnly,
-                                        LengthLimitingTextInputFormatter(4),
-                                        _TimeInputFormatter(),
-                                      ],
-                                      onChanged: (valueTime) {
-                                        minimumHoursSpent = valueTime;
-                                        _validateMinimumHours = false;
-                                      },
-                                      decoration: InputDecoration(
-                                        labelText: '00:00',
-                                        labelStyle:
-                                        TextStyle(color: Colors.grey[350]),
-                                        border: const OutlineInputBorder(),
-                                        contentPadding:
-                                        const EdgeInsets.symmetric(
-                                            horizontal: 10.0),
-                                        errorText: _validateMinimumHours
-                                            ? 'Please add Minimum Hours'
-                                            : null,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.04),
-                        ],
-                      ),
-                    ),
-                  ),
-                  actions: <Widget>[
-                    SizedBox(
-                      width: double.infinity, // Make button width infinite
-                      child: TextButton(
-                        onPressed: () async {
-                          if (isSaveClick == true) {
-                            isSaveClick = false;
-                            setState(() {
-                              isAction = true;
-                            });
-                            if (createEmployee == null) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = false;
-                                _validateEmployee = true;
-                                _validateDate = false;
-                                _validateShift = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (attendanceDateController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = false;
-                                _validateDate = true;
-                                _validateEmployee = false;
-                                _validateShift = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (createShift == null) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = false;
-                                _validateShift = true;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (checkInDateController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = false;
-                                _validateCheckInDate = true;
-                                _validateShift = false;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckIn = false;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (checkInHoursController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = false;
-                                _validateShift = false;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = true;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (checkOutDateController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = true;
-                                _validateCheckOut = false;
-                                _validateShift = false;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (checkoutHoursController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = true;
-                                _validateShift = false;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateWorkingHours = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (workedHoursController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateWorkingHours = true;
-                                _validateShift = false;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateCheckOutDate = false;
-                                _validateCheckOut = false;
-                                _validateMinimumHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else if (minimumHourController.text.isEmpty) {
-                              setState(() {
-                                isAction = false;
-                                isSaveClick = true;
-                                _validateMinimumHours = true;
-                                _validateShift = false;
-                                _validateDate = false;
-                                _validateEmployee = false;
-                                _validateCheckInDate = false;
-                                _validateCheckIn = false;
-                                _validateCheckOutDate = false;
-                                _validateWorkingHours = false;
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              });
-                            } else {
-                              String defaultAttendanceDate =
-                              DateFormat('yyyy-MM-dd')
-                                  .format(DateTime.now());
-                              String defaultCheckInDate =
-                              DateFormat('yyyy-MM-dd')
-                                  .format(DateTime.now());
-                              String defaultTime = '00:00';
-                              Map<String, dynamic> createdDetails = {
-                                "employee_id": selectedEmployeeId ?? '',
-                                "attendance_date":
-                                attendanceDateController.text.isNotEmpty
-                                    ? attendanceDateController.text
-                                    : defaultAttendanceDate,
-                                'shift_id': selectedShiftId ?? '',
-                                'attendance_clock_in_date':
-                                checkInDateController.text.isNotEmpty
-                                    ? checkInDateController.text
-                                    : defaultCheckInDate,
-                                'attendance_clock_in':
-                                checkInHoursSpent.isNotEmpty
-                                    ? checkInHoursSpent
-                                    : defaultTime,
-                                'attendance_clock_out_date':
-                                checkOutDateController.text.isNotEmpty
-                                    ? checkOutDateController.text
-                                    : defaultCheckInDate,
-                                'attendance_clock_out':
-                                checkOutHoursSpent.isNotEmpty
-                                    ? checkOutHoursSpent
-                                    : defaultTime,
-                                'attendance_worked_hour':
-                                workHoursSpent.isNotEmpty
-                                    ? workHoursSpent
-                                    : defaultTime,
-                                'minimum_hour': minimumHoursSpent.isNotEmpty
-                                    ? minimumHoursSpent
-                                    : defaultTime,
-                              };
-                              await createNewAttendance(createdDetails);
-                              setState(() {
-                                isAction = false;
-                              });
-                              if (_errorMessage == null ||
-                                  _errorMessage!.isEmpty) {
-                                Navigator.of(context).pop(true);
-                                showCreateAnimation();
-                              } else {
-                                Navigator.of(context).pop(true);
-                                showCreateAttendanceDialog(context);
-                              }
-                            }
-                          }
-                        },
-                        style: ButtonStyle(
-                          backgroundColor:
-                          MaterialStateProperty.all<Color>(Colors.red),
-                          shape:
-                          MaterialStateProperty.all<RoundedRectangleBorder>(
-                            RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(6.0),
-                            ),
-                          ),
-                        ),
-                        child: const Text('Save',
-                            style: TextStyle(color: Colors.white)),
-                      ),
-                    ),
-                  ],
-                ),
-                if (isAction)
-                  const Center(
-                    child: CircularProgressIndicator(),
-                  ),
-              ],
-            );
-          },
-        );
-      },
+  Future<bool> _openExportedPdf(File file) async {
+    try {
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final result = await OpenFile.open(
+        file.path,
+        type: 'application/pdf',
+      );
+
+      return result.type == ResultType.done;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _shareExportedPdf(File file) async {
+    try {
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'Monthly attendance PDF',
+        subject: 'Monthly attendance PDF',
+      );
+    } catch (_) {
+      _showSnack('Unable to share PDF');
+    }
+  }
+
+  String _exportErrorMessage(int statusCode) {
+    switch (statusCode) {
+      case 401:
+        return 'Session expired (401). Please login again.';
+      case 403:
+        return 'You do not have permission to export this PDF (403).';
+      case 500:
+        return 'Server failed to generate PDF (500).';
+      default:
+        return 'Failed to export PDF (HTTP $statusCode).';
+    }
+  }
+
+  Future<void> _onRefresh() async {
+    await _fetchMonthlyAttendance(showLoader: false);
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 4,
-      child: Scaffold(
-        backgroundColor: Colors.white,
-        key: _scaffoldKey,
-        appBar: AppBar(
-          backgroundColor: Colors.white,
-          leading: IconButton(
-            icon: const Icon(Icons.menu), // Menu icon
-            onPressed: () {
-              _scaffoldKey.currentState?.openDrawer();
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Attendance'),
+        actions: [
+          IconButton(
+            tooltip: 'Punching History',
+            onPressed: () => Navigator.pushNamed(context, '/attendance_punching_history'),
+            icon: const Icon(Icons.history),
+          ),
+        ],
+      ),
+      drawer: _buildDrawer(context),
+      extendBody: true,
+      bottomNavigationBar: _buildBottomNav(context),
+      body: Column(
+        children: [
+          _buildFilters(context),
+          const SizedBox(height: 8),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _onRefresh,
+              child: _buildBody(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDrawer(BuildContext context) {
+    return Drawer(
+      child: ListView(
+        padding: const EdgeInsets.all(0),
+        children: [
+          DrawerHeader(
+            decoration: const BoxDecoration(),
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SizedBox(
+                width: 80,
+                height: 80,
+                child: Image.asset('Assets/horilla-logo.png'),
+              ),
+            ),
+          ),
+          ListTile(
+            title: const Text('Attendance'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/attendance_attendance');
             },
           ),
-          title: const Text('Attendance',
-              style:
-              TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.all(12.0), // Adjust the value as needed
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  Container(
-                    alignment: Alignment.centerRight,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        setState(() {
-                          isSaveClick = true;
-                          _errorMessage = null;
-                          createEmployee = null;
-                          createShift = null;
-                          isAction = false;
-                          _validateMinimumHours = false;
-                          _validateShift = false;
-                          _validateDate = false;
-                          _validateEmployee = false;
-                          _validateCheckInDate = false;
-                          _validateCheckIn = false;
-                          _validateCheckOutDate = false;
-                          _validateWorkingHours = false;
-                          _typeAheadCreateController.clear();
-                          attendanceDateController.clear();
-                          _typeAheadCreateShiftController.clear();
-                          checkInDateController.clear();
-                          checkInHoursController.clear();
-                          checkOutDateController.clear();
-                          checkoutHoursController.clear();
-                          workedHoursController.clear();
-                          minimumHourController.clear();
-                        });
-                        showCreateAttendanceDialog(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(75, 50),
-                        backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(4.0),
-                          side: const BorderSide(color: Colors.red),
-                        ),
-                      ),
-                      child: const Text('CREATE',
-                          style: TextStyle(color: Colors.red)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        body: isLoading ? _buildLoadingWidget() : _buildEmployeeDetailsWidget(),
-        drawer: _permissionsLoaded
-            ? Drawer(
-          child: ListView(
-            padding: const EdgeInsets.all(0),
-            children: [
-              DrawerHeader(
-                decoration: const BoxDecoration(),
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: SizedBox(
-                    width: 80,
-                    height: 80,
-                    child: Image.asset('Assets/horilla-logo.png'),
-                  ),
-                ),
-              ),
-              // Only show Overview if permission is true
-              if (_permissionOverview)
-                ListTile(
-                  title: const Text('Overview'),
-                  onTap: () { Navigator.pushNamed(context, '/attendance_overview'); },
-                ),
-              // Always show Attendance (default permission is true)
-              ListTile(
-                title: const Text('Attendance'),
-                onTap: () {
-                  Navigator.pushNamed(context, '/attendance_attendance');
-                },
-              ),
-              // Only show if permission is true
-              if (_permissionAttendanceRequest)
-                ListTile(
-                  title: const Text('Requests'),
-                  onTap: () {
-                    Navigator.pushNamed(context, '/attendance_request');
-                  },
-                ),
-              // Only show if permission is true
-              if (_permissionHourAccount)
-                ListTile(
-                  title: const Text('Hour Account'),
-                  onTap: () {
-                    Navigator.pushNamed(context, '/employee_hour_account');
-                  },
-                ),
-            ],
+          ListTile(
+            title: const Text('Punching History'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/attendance_punching_history');
+            },
           ),
-        )
-            : Drawer( // Loading state
-          child: ListView(
-            padding: const EdgeInsets.all(0),
-            children: [
-              DrawerHeader(
-                decoration: const BoxDecoration(),
-                child: FittedBox(
-                  fit: BoxFit.contain,
-                  child: SizedBox(
-                    width: 80,
-                    height: 80,
-                    child: Image.asset('Assets/horilla-logo.png'),
-                  ),
-                ),
-              ),
-              shimmerListTile(),
-              shimmerListTile(),
-              shimmerListTile(),
-              shimmerListTile(),
-            ],
-          ),
-        ),
-        bottomNavigationBar: (bottomBarPages.length <= maxCount)
-            ? AnimatedNotchBottomBar(
-          /// Provide NotchBottomBarController
-          notchBottomBarController: _controller,
-          color: Colors.red,
-          showLabel: true,
-          notchColor: Colors.red,
-          kBottomRadius: 28.0,
-          kIconSize: 24.0,
-
-          /// restart app if you change removeMargins
-          removeMargins: false,
-          bottomBarWidth: MediaQuery.of(context).size.width * 1,
-          durationInMilliSeconds: 300,
-          bottomBarItems: const [
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.home_filled,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.home_filled,
-                color: Colors.white,
-              ),
+          if (_permissionAttendanceRequest)
+            ListTile(
+              title: const Text('Requests'),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/attendance_request');
+              },
             ),
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.update_outlined,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.update_outlined,
-                color: Colors.white,
-              ),
-            ),
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.person,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.person,
-                color: Colors.white,
-              ),
-              // itemLabel: 'Profile',
-            ),
-          ],
-
-          onTap: (index) async {
-            switch (index) {
-              case 0:
-                Navigator.pushNamed(context, '/home');
-                break;
-              case 1:
-                Navigator.pushNamed(
-                    context, '/employee_checkin_checkout');
-                break;
-              case 2:
-                Navigator.pushNamed(context, '/employees_form',
-                    arguments: arguments);
-                break;
-            }
-          },
-        )
-            : null,
-      ),
-      // ),
-    );
-  }
-  Widget shimmerListTile() {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[300]!,
-      highlightColor: Colors.grey[100]!,
-      child: ListTile(
-        title: Container(
-          width: double.infinity,
-          height: 20.0,
-          color: Colors.white,
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildLoadingWidget() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Card(
-                  margin: const EdgeInsets.all(8),
-                  elevation: 0,
-                  child: Shimmer.fromColors(
-                    baseColor: Colors.grey[300]!,
-                    highlightColor: Colors.grey[100]!,
-                    child: Container(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(4.0),
-                        border: Border.all(color: Colors.grey),
-                        color: Colors.white,
-                      ),
-                      child: const TextField(
-                        decoration: InputDecoration(
-                          hintText: 'Search',
-                          border: InputBorder.none,
-                          prefixIcon: Icon(Icons.search),
-                          contentPadding: EdgeInsets.symmetric(
-                              vertical: 12.0, horizontal: 4.0),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+  Widget _buildBottomNav(BuildContext context) {
+    // Keep same behavior as legacy page.
+    return SafeArea(
+      top: false,
+      left: false,
+      right: false,
+      bottom: true,
+      child: AnimatedNotchBottomBar(
+        notchBottomBarController: _bottomController,
+        color: Colors.red,
+        showLabel: true,
+        notchColor: Colors.red,
+        kBottomRadius: 28.0,
+        kIconSize: 24.0,
+        removeMargins: false,
+        bottomBarWidth: MediaQuery.of(context).size.width * 1,
+        durationInMilliSeconds: 300,
+        bottomBarItems: const [
+          BottomBarItem(
+            inActiveItem: Icon(Icons.home_filled, color: Colors.white),
+            activeItem: Icon(Icons.home_filled, color: Colors.white),
           ),
-        ),
-        SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-        _buildTabBarShimmer(),
-        SizedBox(height: MediaQuery.of(context).size.height * 0.03),
-        Expanded(
-          child: TabBarView(
-            children: [
-              buildMyAttendanceLoadingAttendanceContent(
-                  requestsMyAttendance, _scrollController, searchText),
-              buildValidateLoadingAttendanceContent(
-                  requestsNonValidAttendance, _scrollController, searchText),
-              buildOvertimeLoadingAttendanceContent(
-                  requestsOvertimeAttendance, _scrollController, searchText),
-              buildValidatedLoadingAttendanceContent(
-                  requestsValidatedAttendance, _scrollController, searchText),
-            ],
+          BottomBarItem(
+            inActiveItem: Icon(Icons.update_outlined, color: Colors.white),
+            activeItem: Icon(Icons.update_outlined, color: Colors.white),
           ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTabBarShimmer() {
-    return Shimmer.fromColors(
-      baseColor: Colors.grey[300]!,
-      highlightColor: Colors.grey[100]!,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: List.generate(4, (index) {
-            return Container(
-              margin: const EdgeInsets.symmetric(horizontal: 8.0),
-              height: 30.0,
-              width: 120.0,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16.0),
-              ),
-            );
-          }),
-        ),
+          BottomBarItem(
+            inActiveItem: Icon(Icons.person, color: Colors.white),
+            activeItem: Icon(Icons.person, color: Colors.white),
+          ),
+        ],
+        onTap: (index) {
+          switch (index) {
+            case 0:
+              Navigator.pushNamed(context, '/home');
+              break;
+            case 1:
+              Navigator.pushNamed(context, '/employee_checkin_checkout');
+              break;
+            case 2:
+              Navigator.pushNamed(
+                context,
+                '/employees_form',
+                arguments: _profileArguments,
+              );
+              break;
+          }
+        },
       ),
     );
   }
 
 
-  Widget _buildEmployeeDetailsWidget() {
-    return Stack(
-      children: [
-        Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Row(
+  Widget _buildFilters(BuildContext context) {
+    final monthText = _monthFormat.format(_selectedMonth);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Card(
+        elevation: 0,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
                   Expanded(
-                    child: Card(
-                      margin: const EdgeInsets.all(8),
-                      elevation: 0,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade50),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: TextField(
-                          onChanged: (employeeSearchValue) {
-                            if (_debounce?.isActive ?? false) {
-                              _debounce!.cancel();
-                            }
-                            _debounce = Timer(const Duration(milliseconds: 500), () {
-                              setState(() {
-                                searchText = employeeSearchValue;
-                                // Reset to page 1 when searching
-                                currentPage = 1;
-                                requestsMyAttendance.clear();
-                                requestsNonValidAttendance.clear();
-                                requestsOvertimeAttendance.clear();
-                                requestsValidatedAttendance.clear();
-
-                                // Fetch data with search filter
-                                getMyAttendance(reset: true);
-                                getAllNonValidatedAttendance(reset: true);
-                                getAllOvertimeAttendance(reset: true);
-                                getAllValidatedAttendance(reset: true);
-                              });
-                            });
-                          },
-                          decoration: InputDecoration(
-                            hintStyle: TextStyle(color: Colors.blueGrey.shade300, fontSize: 14),
-                            hintText: 'Search',
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(8.0),
-                              borderSide: BorderSide.none,
-                            ),
-                            filled: true,
-                            fillColor: Colors.grey[100],
-                            prefixIcon: Transform.scale(
-                              scale: 0.8,
-                              child: Icon(Icons.search, color: Colors.blueGrey.shade300),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                                vertical: 12.0, horizontal: 4.0),
-                          ),
-                          style: const TextStyle(fontSize: 14),
-                        ),
-                      ),
+                    child: _FilterChipButton(
+                      icon: Icons.calendar_month,
+                      label: monthText,
+                      onTap: _pickMonth,
                     ),
+                  ),
+                  const SizedBox(width: 8),
+                  _FilterIconButton(
+                    icon: _isExporting ? null : Icons.picture_as_pdf_outlined,
+                    tooltip: 'Export PDF',
+                    onTap: (_isLoading || _selectedEmployeeId == null || _isExporting)
+                        ? null
+                        : _exportMonthlyAttendancePdf,
+                    child: _isExporting
+                        ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2.2),
+                    )
+                        : null,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Employee',
+                style: Theme.of(context).textTheme.labelLarge,
+              ),
+              const SizedBox(height: 8),
+              _canSelectEmployee
+                  ? GestureDetector(
+                onTap: () async {
+                  if (_employeeOptions.isEmpty) {
+                    _showSnack('No employees available');
+                    return;
+                  }
+
+                  final selected = await showDialog<_EmployeeOption>(
+                    context: context,
+                    builder: (context) => _EmployeePickerDialog(
+                      options: _employeeOptions,
+                      initialSelectedId: _selectedEmployeeId,
+                    ),
+                  );
+
+                  if (selected == null) return;
+
+                  setState(() {
+                    _selectedEmployeeId = selected.id;
+                    _employeeController.text = selected.name;
+                  });
+
+                  await _fetchMonthlyAttendance(showLoader: true);
+                },
+                child: AbsorbPointer(
+                  child: TextFormField(
+                    controller: _employeeController,
+                    readOnly: true,
+                    decoration: const InputDecoration(
+                      hintText: 'Select Employee',
+                      border: OutlineInputBorder(),
+                      isDense: true,
+                      suffixIcon: Icon(Icons.search),
+                    ),
+                  ),
+                ),
+              )
+                  : TextFormField(
+                controller: _employeeController,
+                readOnly: true,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
+    final bottomPad = _listBottomPadding(context);
+    if (_isLoading) {
+      return _buildShimmerList(context, bottomPad: bottomPad);
+    }
+
+    if (_error != null) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.only(bottom: bottomPad),
+        children: [
+          const SizedBox(height: 64),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                children: [
+                  const Icon(Icons.error_outline, size: 40),
+                  const SizedBox(height: 8),
+                  Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () => _fetchMonthlyAttendance(showLoader: true),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Retry'),
                   ),
                 ],
               ),
             ),
-            SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-            TabBar(
-              indicatorColor: Colors.red,
-              labelColor: Colors.red,
-              unselectedLabelColor: Colors.grey,
-              isScrollable: true,
-              tabs: [
-                Tab(text: 'My Attendances ($myAttendances)'),
-                if (attendanceTypeCheck == true)...[
-                  Tab(text: 'To Validate ($toValidate)'),
-                  Tab(text: 'Overtime ($overtime)'),
-                  Tab(text: 'Validated ($validated)'),
-                ]
-              ],
-            ),
-            SizedBox(height: MediaQuery.of(context).size.height * 0.01),
-            Expanded(
-              child: TabBarView(
-                children: [
-                  myAttendances == 0
-                      ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.inventory_outlined,
-                            color: Colors.black,
-                            size: 92,
-                          ),
-                          SizedBox(height: 20),
-                          Text(
-                            "There are no attendance records to display",
-                            style: TextStyle(
-                                fontSize: 16.0,
-                                color: Colors.black,
-                                fontWeight: FontWeight.bold),
-                          ),
-                        ],
-                      ),
-                    ),
-                  )
-                      : buildMyAttendanceContent(
-                      requestsMyAttendance,
-                      _scrollController,
-                      searchText),
-                  if (attendanceTypeCheck == true)...[
-                    toValidate == 0
-                        ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(20.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.inventory_outlined,
-                              color: Colors.black,
-                              size: 92,
-                            ),
-                            SizedBox(height: 20),
-                            Text(
-                              "There are no attendance records to display",
-                              style: TextStyle(
-                                  fontSize: 16.0,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                        : buildValidateAttendanceContent(
-                        requestsNonValidAttendance,
-                        _scrollController,
-                        searchText),
-                    overtime == 0
-                        ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(20.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.inventory_outlined,
-                              color: Colors.black,
-                              size: 92,
-                            ),
-                            SizedBox(height: 20),
-                            Text(
-                              "There are no attendance records to display",
-                              style: TextStyle(
-                                  fontSize: 16.0,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                        : buildOvertimeAttendanceContent(
-                        requestsOvertimeAttendance,
-                        _scrollController,
-                        searchText),
-                    validated == 0
-                        ? const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(20.0),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.inventory_outlined,
-                              color: Colors.black,
-                              size: 92,
-                            ),
-                            SizedBox(height: 20),
-                            Text(
-                              "There are no attendance records to display",
-                              style: TextStyle(
-                                  fontSize: 16.0,
-                                  color: Colors.black,
-                                  fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                        : buildValidatedAttendanceContent(
-                        requestsValidatedAttendance,
-                        _scrollController,
-                        searchText),
-                  ]
-                ],
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
+      );
+    }
+
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(12, 0, 12, bottomPad),
+      children: [
+        if (_isRefreshing)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 8),
+            child: LinearProgressIndicator(minHeight: 2),
+          ),
+        _MonthlyAttendanceSummarySection(summary: _summary),
+        if (_rows.isEmpty)
+          const Padding(
+            padding: EdgeInsets.only(top: 28),
+            child: Center(child: Text('No data')),
+          )
+        else
+          ..._rows.map((row) => _MonthlyAttendanceCard(row: row)),
       ],
     );
   }
 
-  Widget buildMyAttendanceLoadingAttendanceContent(
-      List<Map<String, dynamic>> requestsMyAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        shrinkWrap: true,
-        itemCount: 10,
-        itemBuilder: (context, index) {
-          return Shimmer.fromColors(
-            baseColor: Colors.grey[300]!,
-            highlightColor: Colors.grey[100]!,
-            child: Container(
-              padding: const EdgeInsets.all(8.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey[50]!),
-                  borderRadius: BorderRadius.circular(8.0),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.shade400.withOpacity(0.3),
-                      spreadRadius: 2,
-                      blurRadius: 5,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                    side: const BorderSide(color: Colors.white, width: 0.0),
-                    borderRadius: BorderRadius.circular(10.0),
-                  ),
-                  color: Colors.white,
-                  elevation: 0.1,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 40.0,
-                              height: 40.0,
-                              color: Colors.grey[300],
-                            ),
-                          ],
-                        ),
-                        SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.005),
-                        Container(
-                          height: 20.0,
-                          color: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 10),
-                        Container(
-                          height: 20.0,
-                          width: 80.0,
-                          color: Colors.grey[300],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
+  double _listBottomPadding(BuildContext context) {
+    // Push list content above the bottom notch navigation bar.
+    // Notch bar height varies; adding 96 keeps the last card visible.
+    return MediaQuery.of(context).padding.bottom + 96;
   }
 
-  Widget buildValidateLoadingAttendanceContent(
-      List<Map<String, dynamic>> requestsNonValidAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        shrinkWrap: true,
-        itemCount: 10,
-        itemBuilder: (context, index) {
-          return Shimmer.fromColors(
-            baseColor: Colors.grey[300]!,
-            highlightColor: Colors.grey[100]!,
-            child: Container(
-              padding: const EdgeInsets.all(8.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey[50]!),
-                  borderRadius: BorderRadius.circular(8.0),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.shade400.withOpacity(0.3),
-                      spreadRadius: 2,
-                      blurRadius: 5,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                    side: const BorderSide(color: Colors.white, width: 0.0),
-                    borderRadius: BorderRadius.circular(10.0),
-                  ),
-                  color: Colors.white,
-                  elevation: 0.1,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 40.0,
-                              height: 40.0,
-                              color: Colors.grey[300],
-                            ),
-                          ],
-                        ),
-                        SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.005),
-                        Container(
-                          height: 20.0,
-                          color: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 10),
-                        Container(
-                          height: 20.0,
-                          width: 80.0,
-                          color: Colors.grey[300],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget buildOvertimeLoadingAttendanceContent(
-      List<Map<String, dynamic>> requestsNonValidAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        shrinkWrap: true,
-        itemCount: 10,
-        itemBuilder: (context, index) {
-          return Shimmer.fromColors(
-            baseColor: Colors.grey[300]!,
-            highlightColor: Colors.grey[100]!,
-            child: Container(
-              padding: const EdgeInsets.all(8.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey[50]!),
-                  borderRadius: BorderRadius.circular(8.0),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.shade400.withOpacity(0.3),
-                      spreadRadius: 2,
-                      blurRadius: 5,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                    side: const BorderSide(color: Colors.white, width: 0.0),
-                    borderRadius: BorderRadius.circular(10.0),
-                  ),
-                  color: Colors.white,
-                  elevation: 0.1,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 40.0,
-                              height: 40.0,
-                              color: Colors.grey[300],
-                            ),
-                          ],
-                        ),
-                        SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.005),
-                        Container(
-                          height: 20.0,
-                          color: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 10),
-                        Container(
-                          height: 20.0,
-                          width: 80.0,
-                          color: Colors.grey[300],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget buildValidatedLoadingAttendanceContent(
-      List<Map<String, dynamic>> requestsNonValidAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        shrinkWrap: true,
-        itemCount: 10,
-        itemBuilder: (context, index) {
-          return Shimmer.fromColors(
-            baseColor: Colors.grey[300]!,
-            highlightColor: Colors.grey[100]!,
-            child: Container(
-              padding: const EdgeInsets.all(8.0),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  border: Border.all(color: Colors.grey[50]!),
-                  borderRadius: BorderRadius.circular(8.0),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.grey.shade400.withOpacity(0.3),
-                      spreadRadius: 2,
-                      blurRadius: 5,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                    side: const BorderSide(color: Colors.white, width: 0.0),
-                    borderRadius: BorderRadius.circular(10.0),
-                  ),
-                  color: Colors.white,
-                  elevation: 0.1,
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 40.0,
-                              height: 40.0,
-                              color: Colors.grey[300],
-                            ),
-                          ],
-                        ),
-                        SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.005),
-                        Container(
-                          height: 20.0,
-                          color: Colors.grey[300],
-                        ),
-                        const SizedBox(height: 10),
-                        Container(
-                          height: 20.0,
-                          width: 80.0,
-                          color: Colors.grey[300],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-
-  Widget buildMyAttendanceContent(
-      List<Map<String, dynamic>> requestsMyAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        controller: scrollController,
-        shrinkWrap: true,
-        itemCount: (searchText.isEmpty
-            ? requestsMyAttendance.length
-            : filteredMyAttendance.length) +
-            1, // extra item for loader
-        itemBuilder: (context, index) {
-          if (index ==
-              (searchText.isEmpty
-                  ? requestsMyAttendance.length
-                  : filteredMyAttendance.length)) {
-            return isFetchingMore
-                ? const Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: Center(child: CircularProgressIndicator()),
-            )
-                : const SizedBox();
-          }
-
-          final record = searchText.isEmpty
-              ? requestsMyAttendance[index]
-              : filteredMyAttendance[index];
-          final firstName = record['employee_first_name'] ?? '';
-          final lastName = record['employee_last_name'] ?? '';
-          final fullName =
-              (firstName.isEmpty ? '' : firstName) + (lastName.isEmpty ? '' : ' $lastName');
-          final profile = record['employee_profile'];
-          return buildMyAttendance(record, fullName, profile ?? "", baseUrl, getToken);
-        },
-      ),
-    );
-  }
-
-  Widget buildValidateAttendanceContent(
-      List<Map<String, dynamic>> requestsNonValidAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        controller: scrollController,
-        shrinkWrap: true,
-        itemCount: searchText.isEmpty
-            ? requestsNonValidAttendance.length
-            : filteredNonValidAttendance.length,
-        itemBuilder: (context, index) {
-          final record = searchText.isEmpty
-              ? requestsNonValidAttendance[index]
-              : filteredNonValidAttendance[index];
-
-          final firstName = record['employee_first_name'] ?? '';
-          final lastName = record['employee_last_name'] ?? '';
-          final fullName = (firstName.isEmpty ? '' : firstName) +
-              (lastName.isEmpty ? '' : ' $lastName');
-          final profile = record['employee_profile'];
-          return buildNonValidatedAttendance(
-              record, fullName, profile ?? "", baseUrl, getToken);
-        },
-      ),
-    );
-  }
-
-  Widget buildOvertimeAttendanceContent(
-      List<Map<String, dynamic>> requestsOvertimeAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        controller: scrollController,
-        shrinkWrap: true,
-        itemCount: searchText.isEmpty
-            ? requestsOvertimeAttendance.length
-            : filteredOvertimeAttendance.length,
-        itemBuilder: (context, index) {
-          final record = searchText.isEmpty
-              ? requestsOvertimeAttendance[index]
-              : filteredOvertimeAttendance[index];
-
-          final firstName = record['employee_first_name'] ?? '';
-          final lastName = record['employee_last_name'] ?? '';
-          final fullName = (firstName.isEmpty ? '' : firstName) +
-              (lastName.isEmpty ? '' : ' $lastName');
-          final profile = record['employee_profile'];
-          return buildOvertimeAttendance(
-              record, fullName, profile ?? "", baseUrl, getToken);
-        },
-      ),
-    );
-  }
-
-  Widget buildValidatedAttendanceContent(
-      List<Map<String, dynamic>> requestsValidatedAttendance,
-      scrollController,
-      searchText) {
-    return Padding(
-      padding: const EdgeInsets.all(8.0),
-      child: ListView.builder(
-        controller: scrollController,
-        shrinkWrap: true,
-        itemCount: searchText.isEmpty
-            ? requestsValidatedAttendance.length
-            : filteredValidatedAttendance.length,
-        itemBuilder: (context, index) {
-          final record = searchText.isEmpty
-              ? requestsValidatedAttendance[index]
-              : filteredValidatedAttendance[index];
-          final firstName = record['employee_first_name'] ?? '';
-          final lastName = record['employee_last_name'] ?? '';
-          final fullName = (firstName.isEmpty ? '' : firstName) +
-              (lastName.isEmpty ? '' : ' $lastName');
-          final profile = record['employee_profile'];
-          return buildValidatedAttendance(
-              record, fullName, profile ?? "", baseUrl, getToken);
-        },
-      ),
-    );
-  }
-
-  Widget buildMyAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
-    return GestureDetector(
-      onTap: () {
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(" "),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.grey),
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.95,
-                height: MediaQuery.of(context).size.height * 0.5,
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            width: 40.0,
-                            height: 40.0,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border:
-                              Border.all(color: Colors.grey, width: 1.0),
-                            ),
-                            child: Stack(
-                              children: [
-                                if (record['employee_profile_url'] != null &&
-                                    record['employee_profile_url'].isNotEmpty)
-                                  Positioned.fill(
-                                    child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            record['employee_profile_url'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                if (record['employee_profile_url'] == null ||
-                                    record['employee_profile_url'].isEmpty)
-                                  Positioned.fill(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.grey[400],
-                                      ),
-                                      child: const Icon(Icons.person),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.01),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  fullName ?? '',
-                                  style: const TextStyle(
-                                      fontSize: 16.0,
-                                      fontWeight: FontWeight.bold),
-                                  maxLines: 2,
-                                ),
-                                Text(
-                                  record['badge_id'] != null
-                                      ? '${record['badge_id']}'
-                                      : '',
-                                  style: const TextStyle(
-                                      fontSize: 12.0,
-                                      fontWeight: FontWeight.normal),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                              SizedBox(
-                                  width: MediaQuery.of(context).size.width *
-                                      0.008),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.05),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_in'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_out'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Shift',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['shift_name'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Minimum Hour',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['minimum_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_in_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_out_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'At Work',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_worked_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.01),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.all(8.0),
-        color: Colors.white,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[50]!),
-            borderRadius: BorderRadius.circular(8.0),
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.shade400.withOpacity(0.3),
-                spreadRadius: 2,
-                blurRadius: 5,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
+  Widget _buildShimmerList(BuildContext context, {required double bottomPad}) {
+    return ListView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.fromLTRB(12, 0, 12, bottomPad),
+      itemCount: 8,
+      itemBuilder: (context, index) {
+        return Shimmer.fromColors(
+          baseColor: Colors.grey.shade300,
+          highlightColor: Colors.grey.shade100,
           child: Card(
-            shape: RoundedRectangleBorder(
-              side: const BorderSide(color: Colors.white, width: 0.0),
-              borderRadius: BorderRadius.circular(10.0),
-            ),
-            color: Colors.white,
-            elevation: 0.1,
             child: Padding(
-              padding: const EdgeInsets.all(8.0),
+              padding: const EdgeInsets.all(16),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        width: 40.0,
-                        height: 40.0,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: Colors.grey,
-                              width: 1.0), // Optional border
-                        ),
-                        child: Stack(
-                          children: [
-                            if (record['employee_profile_url'] != null &&
-                                record['employee_profile_url'].isNotEmpty)
-                              Positioned.fill(
-                                child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl + record['employee_profile_url'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey); // Fallback icon
-                                    },
-                                  ),
-                                ),
-                              ),
-                            if (record['employee_profile_url'] == null ||
-                                record['employee_profile_url'].isEmpty)
-                              Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.grey[400],
-                                  ),
-                                  child: const Icon(Icons.person),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: MediaQuery.of(context).size.width * 0.01),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fullName ?? '',
-                              style: const TextStyle(
-                                  fontSize: 16.0, fontWeight: FontWeight.bold),
-                              maxLines: 2,
-                            ),
-                            Text(
-                              record['badge_id'] != null
-                                  ? '${record['badge_id']}'
-                                  : '',
-                              style: const TextStyle(
-                                  fontSize: 12.0,
-                                  fontWeight: FontWeight.normal),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.005),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Date',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_date'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Check-In',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_clock_in'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Check-Out',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_clock_out'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Worked Hours',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_worked_hour'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Minimum Hours',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['minimum_hour'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Shift',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['shift_name'] ?? 'None'}'),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.01),
+                  Container(height: 14, width: 160, color: Colors.white),
+                  const SizedBox(height: 12),
+                  Container(height: 10, width: double.infinity, color: Colors.white),
+                  const SizedBox(height: 8),
+                  Container(height: 10, width: double.infinity, color: Colors.white),
+                  const SizedBox(height: 8),
+                  Container(height: 10, width: 200, color: Colors.white),
                 ],
               ),
             ),
           ),
+        );
+      },
+    );
+  }
+}
+
+class MonthlyAttendanceRow {
+  final int? no;
+  final String date;
+  final String shiftInformation;
+  final String checkIn;
+  final String checkOut;
+  final String workType;
+  final String late;
+  final String earlyOut;
+  final String lateMinutes;
+  final String earlyOutMinutes;
+  final String note;
+  final bool isOff;
+
+  MonthlyAttendanceRow({
+    required this.no,
+    required this.date,
+    required this.shiftInformation,
+    required this.checkIn,
+    required this.checkOut,
+    required this.workType,
+    required this.late,
+    required this.earlyOut,
+    required this.lateMinutes,
+    required this.earlyOutMinutes,
+    required this.note,
+    required this.isOff,
+  });
+
+  factory MonthlyAttendanceRow.fromJson(Map<String, dynamic> json) {
+    return MonthlyAttendanceRow(
+      no: _toIntOrNull(json['no']),
+      date: (json['date'] ?? '').toString(),
+      shiftInformation: (json['shift_information'] ?? '').toString(),
+      checkIn: (json['check_in'] ?? '').toString(),
+      checkOut: (json['check_out'] ?? '').toString(),
+      workType: (json['work_type'] ?? '').toString(),
+      late: (json['late'] ?? '').toString(),
+      earlyOut: (json['early_out'] ?? '').toString(),
+      lateMinutes: _toSafeMinuteText(json['late_minutes']),
+      earlyOutMinutes: _toSafeMinuteText(json['early_out_minutes']),
+      note: (json['note'] ?? '').toString(),
+      isOff: (json['is_off'] == true),
+    );
+  }
+
+  static int? _toIntOrNull(dynamic v) {
+    if (v == null) return null;
+    if (v is int) return v;
+    return int.tryParse(v.toString());
+  }
+}
+
+class MonthlyAttendanceSummary {
+  final String lateMinutes;
+  final String earlyOutMinutes;
+  final String totalMinutes;
+
+  const MonthlyAttendanceSummary({
+    this.lateMinutes = '0',
+    this.earlyOutMinutes = '0',
+    this.totalMinutes = '0',
+  });
+
+  factory MonthlyAttendanceSummary.fromJson(Map<String, dynamic> json) {
+    return MonthlyAttendanceSummary(
+      lateMinutes: _toSafeMinuteText(json['late_minutes'], fallback: '0'),
+      earlyOutMinutes: _toSafeMinuteText(json['early_out_minutes'], fallback: '0'),
+      totalMinutes: _toSafeMinuteText(json['total_minutes'], fallback: '0'),
+    );
+  }
+}
+
+String _toSafeMinuteText(dynamic value, {String fallback = ''}) {
+  if (value == null) return fallback;
+  if (value is num) {
+    return _normalizeMinuteText(value.toString(), fallback: fallback);
+  }
+  return _normalizeMinuteText(value.toString(), fallback: fallback);
+}
+
+String _normalizeMinuteText(String raw, {String fallback = ''}) {
+  final text = raw.trim();
+  if (text.isEmpty || text.toLowerCase() == 'null') return fallback;
+  final parsed = num.tryParse(text);
+  if (parsed == null) return fallback;
+  final safe = parsed < 0 ? 0 : parsed;
+  final normalized = safe.toString();
+  if (!normalized.contains('.')) return normalized;
+
+  // Dart String.replaceFirst/replaceAll use the replacement text literally here,
+  // so using r'\1' can leak a trailing "\1" into the output (for example
+  // "256.0" -> "256\1"). Use a mapped replacement to keep the captured decimal
+  // portion safely and then trim any trailing dot.
+  final withoutTrailingZeros = normalized.replaceFirstMapped(
+    RegExp(r'([.][0-9]*?)0+$'),
+    (match) => match.group(1) ?? '',
+  );
+  return withoutTrailingZeros.replaceFirst(RegExp(r'[.]$'), '');
+}
+
+class _EmployeeOption {
+  final int id;
+  final String name;
+
+  const _EmployeeOption({required this.id, required this.name});
+}
+
+class _FilterChipButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _FilterChipButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Theme.of(context).dividerColor),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
+}
 
-  Widget buildNonValidatedAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
-    return GestureDetector(
-      onTap: () {
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(" "),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.grey),
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.95,
-                height: MediaQuery.of(context).size.height * 0.5,
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            width: 40.0,
-                            height: 40.0,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border:
-                              Border.all(color: Colors.grey, width: 1.0),
-                            ),
-                            child: Stack(
-                              children: [
-                                if (record['employee_profile_url'] != null &&
-                                    record['employee_profile_url'].isNotEmpty)
-                                  Positioned.fill(
-                                    child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            record['employee_profile_url'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                if (record['employee_profile_url'] == null ||
-                                    record['employee_profile_url'].isEmpty)
-                                  Positioned.fill(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.grey[400],
-                                      ),
-                                      child: const Icon(Icons.person),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.01),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  fullName ?? '',
-                                  style: const TextStyle(
-                                      fontSize: 16.0,
-                                      fontWeight: FontWeight.bold),
-                                  maxLines: 2,
-                                ),
-                                Text(
-                                  record['badge_id'] != null
-                                      ? '${record['badge_id']}'
-                                      : '',
-                                  style: const TextStyle(
-                                      fontSize: 12.0,
-                                      fontWeight: FontWeight.normal),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                              SizedBox(
-                                  width: MediaQuery.of(context).size.width *
-                                      0.008),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.05),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_in'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_out'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Shift',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['shift_name'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Minimum Hour',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['minimum_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_in_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_out_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'At Work',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_worked_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.01),
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      isSaveClick = true;
-                      showDialog(
-                        context: context,
-                        builder: (BuildContext context) {
-                          return AlertDialog(
-                            backgroundColor: Colors.white,
-                            title: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "Confirmation",
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.close),
-                                  onPressed: () {
-                                    Navigator.of(context).pop(true);
-                                  },
-                                ),
-                              ],
-                            ),
-                            content: SizedBox(
-                              height: MediaQuery.of(context).size.height * 0.1,
-                              child: const Center(
-                                child: Text(
-                                  "Are you sure you want to Validate this Attendance?",
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black,
-                                    fontSize: 17,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            actions: [
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton(
-                                  onPressed: () async {
-                                    if (isSaveClick == true) {
-                                      isSaveClick = false;
-                                      Map<String, dynamic> validatedDetails = {
-                                        "id": record['id'],
-                                      };
-                                      await validateAttendance(validatedDetails);
-                                      Navigator.of(context).pop();
-                                      Navigator.of(context).pop();
-                                      showValidateAnimation();
-                                    }
-                                  },
-                                  style: ButtonStyle(
-                                    backgroundColor:
-                                    MaterialStateProperty.all<Color>(
-                                        Colors.green),
-                                    shape: MaterialStateProperty.all<
-                                        RoundedRectangleBorder>(
-                                      RoundedRectangleBorder(
-                                        borderRadius:
-                                        BorderRadius.circular(8.0),
-                                      ),
-                                    ),
-                                  ),
-                                  child: const Text(
-                                    "Continue",
-                                    style: TextStyle(color: Colors.white),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      // Red color for assign button
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8.0),
-                      ),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: MediaQuery.of(context).size.width * 0.20,
-                        vertical: MediaQuery.of(context).size.height * 0.001,
-                      ),
-                    ),
-                    child: const Text(
-                      "Validate",
-                      style: TextStyle(fontSize: 18, color: Colors.white),
-                    ),
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.all(8.0),
-        color: Colors.white,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[50]!),
-            borderRadius: BorderRadius.circular(8.0),
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.shade400.withOpacity(0.3),
-                spreadRadius: 2,
-                blurRadius: 5,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Card(
-            shape: RoundedRectangleBorder(
-              side: const BorderSide(color: Colors.white, width: 0.0),
-              borderRadius: BorderRadius.circular(10.0),
-            ),
-            color: Colors.white,
-            elevation: 0.1,
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        width: 40.0,
-                        height: 40.0,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: Colors.grey,
-                              width: 1.0), // Optional border
-                        ),
-                        child: Stack(
-                          children: [
-                            if (record['employee_profile_url'] != null &&
-                                record['employee_profile_url'].isNotEmpty)
-                              Positioned.fill(
-                                child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl + record['employee_profile_url'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey); // Fallback icon
-                                    },
-                                  ),
-                                ),
-                              ),
-                            if (record['employee_profile_url'] == null ||
-                                record['employee_profile_url'].isEmpty)
-                              Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.grey[400],
-                                  ),
-                                  child: const Icon(Icons.person),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: MediaQuery.of(context).size.width * 0.01),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fullName ?? '',
-                              style: const TextStyle(
-                                  fontSize: 16.0, fontWeight: FontWeight.bold),
-                              maxLines: 2,
-                            ),
-                            Text(
-                              record['badge_id'] != null
-                                  ? '${record['badge_id']}'
-                                  : '',
-                              style: const TextStyle(
-                                  fontSize: 12.0,
-                                  fontWeight: FontWeight.normal),
-                            ),
-                          ],
-                        ),
-                      ),
-                      managerCheck != null
-                          ? Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: const BorderRadius.only(
-                                topLeft: Radius.circular(15.0),
-                                bottomLeft: Radius.circular(15.0),
-                              ),
-                              color: Colors.blue[100],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 0.0),
-                              child: IconButton(
-                                icon: const Icon(
-                                  Icons.edit,
-                                  size: 18.0,
-                                  color: Colors.blue,
-                                ),
-                                onPressed: () {
-                                  setState(() {
-                                    isSaveClick = true;
-                                    _errorMessage = null;
-                                    isAction = false;
-                                  });
-                                  _showValidateAttendance(
-                                      context, record);
-                                },
-                              ),
-                            ),
-                          ),
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: const BorderRadius.only(
-                                topRight: Radius.circular(15.0),
-                                bottomRight: Radius.circular(15.0),
-                              ),
-                              color: Colors.red[100],
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 0.0),
-                              child: IconButton(
-                                icon: const Icon(
-                                  Icons.delete,
-                                  size: 18.0,
-                                  color: Colors.red,
-                                ),
-                                onPressed: () async {
-                                  isSaveClick = true;
-                                  await showDialog(
-                                    context: context,
-                                    builder: (BuildContext context) {
-                                      return AlertDialog(
-                                        backgroundColor: Colors.white,
-                                        title: Row(
-                                          mainAxisAlignment:
-                                          MainAxisAlignment
-                                              .spaceBetween,
-                                          children: [
-                                            const Text(
-                                              "Confirmation",
-                                              style: TextStyle(
-                                                fontWeight:
-                                                FontWeight.bold,
-                                                color: Colors.black,
-                                              ),
-                                            ),
-                                            IconButton(
-                                              icon:
-                                              const Icon(Icons.close),
-                                              onPressed: () {
-                                                Navigator.of(context)
-                                                    .pop(true);
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                        content: SizedBox(
-                                          height: MediaQuery.of(context)
-                                              .size
-                                              .height *
-                                              0.1,
-                                          child: const Center(
-                                            child: Text(
-                                              "Are you sure you want to delete this attendance?",
-                                              style: TextStyle(
-                                                fontWeight:
-                                                FontWeight.bold,
-                                                color: Colors.black,
-                                                fontSize: 17,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        actions: [
-                                          SizedBox(
-                                            width: double.infinity,
-                                            child: ElevatedButton(
-                                              onPressed: () async {
-                                                if (isSaveClick == true) {
-                                                  isSaveClick = false;
-                                                  Map<String, dynamic>
-                                                  deletedDetails = {
-                                                    'id': record['id'],
-                                                  };
-                                                  await deleteNonValidatedAttendance(
-                                                      deletedDetails);
-                                                  Navigator.of(context)
-                                                      .pop(true);
-                                                  showDeleteAnimation();
-                                                }
-                                              },
-                                              style: ButtonStyle(
-                                                backgroundColor:
-                                                MaterialStateProperty
-                                                    .all<Color>(
-                                                    Colors.red),
-                                                shape: MaterialStateProperty
-                                                    .all<
-                                                    RoundedRectangleBorder>(
-                                                  RoundedRectangleBorder(
-                                                    borderRadius:
-                                                    BorderRadius
-                                                        .circular(
-                                                        8.0),
-                                                  ),
-                                                ),
-                                              ),
-                                              child: const Text(
-                                                "Continue",
-                                                style: TextStyle(
-                                                    color: Colors.white),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
-                      )
-                          : Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Container(
-                            decoration: BoxDecoration(
-                              borderRadius: const BorderRadius.only(
-                                topLeft: Radius.circular(15.0),
-                                bottomLeft: Radius.circular(15.0),
-                              ),
-                              color: Colors.blue[
-                              100], // Blue background for edit icon
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                  vertical: 0.0),
-                              child: IconButton(
-                                icon: const Icon(
-                                  Icons.edit,
-                                  size: 18.0, // Reduce icon size
-                                  color: Colors.blue, // Set icon color
-                                ),
-                                onPressed: () {
-                                  setState(() {
-                                    isSaveClick = true;
-                                    _errorMessage = null;
-                                    isAction = false;
-                                  });
-                                  _showValidateAttendance(
-                                      context, record);
-                                },
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.005),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Date',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_date'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Check-In',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_clock_in'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Shift',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['shift_name'] ?? 'None'}'),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.01),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      ElevatedButton(
-                        onPressed: () async {
-                          isSaveClick = true;
-                          showDialog(
-                            context: context,
-                            builder: (BuildContext context) {
-                              return AlertDialog(
-                                backgroundColor: Colors.white,
-                                title: Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      "Confirmation",
-                                      style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.black),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.close),
-                                      onPressed: () {
-                                        Navigator.of(context)
-                                            .pop(true); // Close the dialog
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                content: SizedBox(
-                                  height:
-                                  MediaQuery.of(context).size.height * 0.1,
-                                  child: const Center(
-                                    child: Text(
-                                      "Are you sure you want to Validate this Attendance?",
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.black,
-                                        fontSize: 17,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                actions: [
-                                  SizedBox(
-                                    width: double.infinity,
-                                    child: ElevatedButton(
-                                      onPressed: () async {
-                                        if (isSaveClick == true) {
-                                          isSaveClick = false;
-                                          Map<String, dynamic> validatedDetails =
-                                          {
-                                            "id": record['id'],
-                                          };
-                                          await validateAttendance(
-                                              validatedDetails);
-                                          Navigator.of(context).pop(true);
-                                          showValidateAnimation();
-                                        }
-                                      },
-                                      style: ButtonStyle(
-                                        backgroundColor:
-                                        MaterialStateProperty.all<Color>(
-                                            Colors.green),
-                                        shape: MaterialStateProperty.all<
-                                            RoundedRectangleBorder>(
-                                          RoundedRectangleBorder(
-                                            borderRadius:
-                                            BorderRadius.circular(8.0),
-                                          ),
-                                        ),
-                                      ),
-                                      child: const Text(
-                                        "Continue",
-                                        style: TextStyle(color: Colors.white),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          );
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                          ),
-                          padding: EdgeInsets.symmetric(
-                            horizontal:
-                            MediaQuery.of(context).size.width * 0.30,
-                            vertical: MediaQuery.of(context).size.height * 0.01,
-                          ),
-                        ),
-                        child: const Text(
-                          'Validate',
-                          style: TextStyle(fontSize: 18, color: Colors.white),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+class _FilterIconButton extends StatelessWidget {
+  final IconData? icon;
+  final String tooltip;
+  final VoidCallback? onTap;
+  final Widget? child;
 
-  Widget buildOvertimeAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
-    return GestureDetector(
-      onTap: () {
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(""),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.grey),
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.95,
-                height: MediaQuery.of(context).size.height * 0.5,
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            width: 40.0,
-                            height: 40.0,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border:
-                              Border.all(color: Colors.grey, width: 1.0),
-                            ),
-                            child: Stack(
-                              children: [
-                                if (record['employee_profile_url'] != null &&
-                                    record['employee_profile_url'].isNotEmpty)
-                                  Positioned.fill(
-                                    child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            record['employee_profile_url'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                if (record['employee_profile_url'] == null ||
-                                    record['employee_profile_url'].isEmpty)
-                                  Positioned.fill(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.grey[400],
-                                      ),
-                                      child: const Icon(Icons.person),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.01),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  fullName ?? '',
-                                  style: const TextStyle(
-                                      fontSize: 16.0,
-                                      fontWeight: FontWeight.bold),
-                                  maxLines: 2,
-                                ),
-                                Text(
-                                  record['badge_id'] != null
-                                      ? '${record['badge_id']}'
-                                      : '',
-                                  style: const TextStyle(
-                                      fontSize: 12.0,
-                                      fontWeight: FontWeight.normal),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                              SizedBox(
-                                  width: MediaQuery.of(context).size.width *
-                                      0.008),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.05),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_in'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_out'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Shift',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['shift_name'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Minimum Hour',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['minimum_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_in_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_out_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'At Work',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_worked_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                SizedBox(
-                  width: double.infinity,
-                  child: !record['attendance_overtime_approve']
-                      ? ElevatedButton(
-                    onPressed: () async {
-                      showDialog(
-                        context: context,
-                        builder: (BuildContext context) {
-                          return AlertDialog(
-                            backgroundColor: Colors.white,
-                            title: Row(
-                              mainAxisAlignment:
-                              MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text(
-                                  "Confirmation",
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.black),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.close),
-                                  onPressed: () {
-                                    Navigator.of(context).pop(true);
-                                  },
-                                ),
-                              ],
-                            ),
-                            content: SizedBox(
-                              height: MediaQuery.of(context).size.height *
-                                  0.1,
-                              child: const Center(
-                                child: Text(
-                                  'Are you sure you want to Validate this Attendance?',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.black,
-                                    fontSize: 17,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            actions: [
-                              SizedBox(
-                                width: double.infinity,
-                                child: ElevatedButton(
-                                  onPressed: () async {
-                                    Map<String, dynamic>
-                                    validatedDetails = {
-                                      "id": record['id'],
-                                    };
-                                    await validateOverTime(
-                                        validatedDetails);
-                                    Navigator.of(context).pop();
-                                    Navigator.of(context).pop();
-                                    showValidateAnimation();
-                                  },
-                                  style: ButtonStyle(
-                                    backgroundColor:
-                                    MaterialStateProperty.all<Color>(
-                                        Colors.green),
-                                    shape: MaterialStateProperty.all<
-                                        RoundedRectangleBorder>(
-                                      RoundedRectangleBorder(
-                                        borderRadius:
-                                        BorderRadius.circular(6.0),
-                                      ),
-                                    ),
-                                  ),
-                                  child: const Text('Validate',
-                                      style:
-                                      TextStyle(color: Colors.white)),
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8.0),
-                      ),
-                      padding: EdgeInsets.symmetric(
-                        horizontal:
-                        MediaQuery.of(context).size.width * 0.20,
-                        vertical:
-                        MediaQuery.of(context).size.height * 0.001,
-                      ),
-                    ),
-                    child: const Text(
-                      "Validate",
-                      style: TextStyle(fontSize: 18, color: Colors.white),
-                    ),
-                  )
-                      : const SizedBox.shrink(),
-                ),
-              ],
-            );
-          },
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.all(8.0),
-        color: Colors.white,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[50]!),
-            borderRadius: BorderRadius.circular(8.0),
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.shade400.withOpacity(0.3),
-                spreadRadius: 2,
-                blurRadius: 5,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Card(
-            shape: RoundedRectangleBorder(
-              side: const BorderSide(color: Colors.white, width: 0.0),
-              borderRadius: BorderRadius.circular(10.0),
-            ),
-            color: Colors.white,
-            elevation: 0.1, //
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        width: 40.0,
-                        height: 40.0,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.grey, width: 1.0),
-                        ),
-                        child: Stack(
-                          children: [
-                            if (record['employee_profile_url'] != null &&
-                                record['employee_profile_url'].isNotEmpty)
-                              Positioned.fill(
-                                child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl + record['employee_profile_url'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
-                                ),
-                              ),
-                            if (record['employee_profile_url'] == null ||
-                                record['employee_profile_url'].isEmpty)
-                              Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.grey[400],
-                                  ),
-                                  child: const Icon(Icons.person),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: MediaQuery.of(context).size.width * 0.01),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fullName ?? '',
-                              style: const TextStyle(
-                                  fontSize: 16.0, fontWeight: FontWeight.bold),
-                              maxLines: 2,
-                            ),
-                            Text(
-                              record['badge_id'] != null
-                                  ? '${record['badge_id']}'
-                                  : '',
-                              style: const TextStyle(
-                                  fontSize: 12.0,
-                                  fontWeight: FontWeight.normal),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
-                        children: [
-                          Visibility(
-                            visible: !record['attendance_overtime_approve'],
-                            child: Container(
-                              decoration: BoxDecoration(
-                                borderRadius: const BorderRadius.only(
-                                  topLeft: Radius.circular(15.0),
-                                  bottomLeft: Radius.circular(15.0),
-                                ),
-                                color: Colors.blue[100],
-                              ),
-                              child: Padding(
-                                padding:
-                                const EdgeInsets.symmetric(vertical: 0.0),
-                                child: IconButton(
-                                  icon: const Icon(
-                                    Icons.edit,
-                                    size: 18.0,
-                                    color: Colors.blue,
-                                  ),
-                                  onPressed: () {
-                                    setState(() {
-                                      isSaveClick = true;
-                                      _errorMessage = null;
-                                      isAction = false;
-                                    });
-                                    _showValidateOvertimeAttendance(
-                                        context, record);
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                          Visibility(
-                            visible: !record['attendance_overtime_approve'],
-                            child: Container(
-                              decoration: BoxDecoration(
-                                borderRadius: const BorderRadius.only(
-                                  topRight: Radius.circular(15.0),
-                                  bottomRight: Radius.circular(15.0),
-                                ),
-                                color: Colors.red[100],
-                              ),
-                              child: Padding(
-                                padding:
-                                const EdgeInsets.symmetric(vertical: 0.0),
-                                child: IconButton(
-                                  icon: const Icon(
-                                    Icons.delete,
-                                    size: 18.0, // Reduce icon size
-                                    color: Colors.red, // Set icon color
-                                  ),
-                                  onPressed: () async {
-                                    isSaveClick = true;
-                                    await showDialog(
-                                      context: context,
-                                      builder: (BuildContext context) {
-                                        return AlertDialog(
-                                          backgroundColor: Colors.white,
-                                          title: Row(
-                                            mainAxisAlignment:
-                                            MainAxisAlignment.spaceBetween,
-                                            children: [
-                                              const Text(
-                                                "Confirmation",
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.black,
-                                                ),
-                                              ),
-                                              IconButton(
-                                                icon: const Icon(Icons.close),
-                                                onPressed: () {
-                                                  Navigator.of(context).pop(
-                                                      true); // Close the dialog
-                                                },
-                                              ),
-                                            ],
-                                          ),
-                                          content: SizedBox(
-                                            height: MediaQuery.of(context)
-                                                .size
-                                                .height *
-                                                0.1,
-                                            child: const Center(
-                                              child: Text(
-                                                "Are you sure you want to delete this attendance?",
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.black,
-                                                  fontSize: 17,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          actions: [
-                                            SizedBox(
-                                              width: double.infinity,
-                                              child: ElevatedButton(
-                                                onPressed: () async {
-                                                  if (isSaveClick == true) {
-                                                    isSaveClick = false;
-                                                    Map<String, dynamic>
-                                                    deletedDetails = {
-                                                      'id': record['id'],
-                                                    };
-                                                    await deleteAttendance(
-                                                        deletedDetails);
-                                                    Navigator.of(context)
-                                                        .pop(true);
-                                                    showDeleteAnimation();
-                                                  }
-                                                },
-                                                style: ButtonStyle(
-                                                  backgroundColor:
-                                                  MaterialStateProperty.all<
-                                                      Color>(Colors.red),
-                                                  shape:
-                                                  MaterialStateProperty.all<
-                                                      RoundedRectangleBorder>(
-                                                    RoundedRectangleBorder(
-                                                      borderRadius:
-                                                      BorderRadius.circular(
-                                                          8.0),
-                                                    ),
-                                                  ),
-                                                ),
-                                                child: const Text(
-                                                  "Continue",
-                                                  style: TextStyle(
-                                                      color: Colors.white),
-                                                ),
-                                              ),
-                                            ),
-                                          ],
-                                        );
-                                      },
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.005),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Date',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_date'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Check-In',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['attendance_clock_in'] ?? 'None'}'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Shift',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text('${record['shift_name'] ?? 'None'}'),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.01),
-                  Visibility(
-                    visible: !record['attendance_overtime_approve'],
-                    // Hide if attendance is validated
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        ElevatedButton(
-                          onPressed: () async {
-                            isSaveClick = true;
-                            showDialog(
-                              context: context,
-                              builder: (BuildContext context) {
-                                return AlertDialog(
-                                  backgroundColor: Colors.white,
-                                  title: Row(
-                                    mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Text(
-                                        "Confirmation",
-                                        style: TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            color: Colors.black),
-                                      ),
-                                      IconButton(
-                                        icon: const Icon(Icons.close),
-                                        onPressed: () {
-                                          Navigator.of(context).pop(true);
-                                        },
-                                      ),
-                                    ],
-                                  ),
-                                  content: SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.1,
-                                    child: const Center(
-                                      child: Text(
-                                        'Do you want to Validate this Attendance?',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.black,
-                                          fontSize: 17,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  actions: [
-                                    SizedBox(
-                                      width: double.infinity,
-                                      child: ElevatedButton(
-                                        onPressed: () async {
-                                          if (isSaveClick == true) {
-                                            isSaveClick = false;
-                                            Map<String, dynamic>
-                                            validatedDetails = {
-                                              "id": record['id'],
-                                            };
-                                            await validateOverTime(
-                                                validatedDetails);
-                                            Navigator.of(context).pop(true);
-                                            showValidateAnimation();
-                                          }
-                                        },
-                                        style: ButtonStyle(
-                                          backgroundColor:
-                                          MaterialStateProperty.all<Color>(
-                                              Colors.green),
-                                          shape: MaterialStateProperty.all<
-                                              RoundedRectangleBorder>(
-                                            RoundedRectangleBorder(
-                                              borderRadius:
-                                              BorderRadius.circular(6.0),
-                                            ),
-                                          ),
-                                        ),
-                                        child: const Text('Continue',
-                                            style:
-                                            TextStyle(color: Colors.white)),
-                                      ),
-                                    ),
-                                  ],
-                                );
-                              },
-                            );
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.green,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8.0),
-                            ),
-                            padding: EdgeInsets.symmetric(
-                              horizontal:
-                              MediaQuery.of(context).size.width * 0.30,
-                              vertical:
-                              MediaQuery.of(context).size.height * 0.01,
-                            ),
-                          ),
-                          child: const Text(
-                            'Validate',
-                            style: TextStyle(fontSize: 18, color: Colors.white),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  const _FilterIconButton({
+    this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.child,
+  });
 
-  Widget buildValidatedAttendance(
-      Map<String, dynamic> record, fullName, String profile, baseUrl, token) {
-    return GestureDetector(
-      onTap: () {
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(" "),
-                  IconButton(
-                    icon: const Icon(Icons.close, color: Colors.grey),
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                    },
-                  ),
-                ],
-              ),
-              content: SizedBox(
-                width: MediaQuery.of(context).size.width * 0.95,
-                height: MediaQuery.of(context).size.height * 0.5,
-                child: Padding(
-                  padding: const EdgeInsets.all(8.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Container(
-                            width: 40.0,
-                            height: 40.0,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border:
-                              Border.all(color: Colors.grey, width: 1.0),
-                            ),
-                            child: Stack(
-                              children: [
-                                if (record['employee_profile_url'] != null &&
-                                    record['employee_profile_url'].isNotEmpty)
-                                  Positioned.fill(
-                                    child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            record['employee_profile_url'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                if (record['employee_profile_url'] == null ||
-                                    record['employee_profile_url'].isEmpty)
-                                  Positioned.fill(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.grey[400],
-                                      ),
-                                      child: const Icon(Icons.person),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(
-                              width: MediaQuery.of(context).size.width * 0.01),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  fullName ?? '',
-                                  style: const TextStyle(
-                                      fontSize: 16.0,
-                                      fontWeight: FontWeight.bold),
-                                  maxLines: 2,
-                                ),
-                                Text(
-                                  record['badge_id'] != null
-                                      ? '${record['badge_id']}'
-                                      : '',
-                                  style: const TextStyle(
-                                      fontSize: 12.0,
-                                      fontWeight: FontWeight.normal),
-                                ),
-                              ],
-                            ),
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                              SizedBox(
-                                  width: MediaQuery.of(context).size.width *
-                                      0.008),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.grey[200],
-                                  borderRadius: BorderRadius.circular(4.0),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.05),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_in'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_clock_out'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Shift',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['shift_name'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Minimum Hour',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['minimum_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-In Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_in_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Check-Out Date',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text(
-                              '${record['attendance_clock_out_date'] ?? 'None'}'),
-                        ],
-                      ),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'At Work',
-                            style: TextStyle(color: Colors.grey.shade700),
-                          ),
-                          Text('${record['attendance_worked_hour'] ?? 'None'}'),
-                        ],
-                      ),
-                      SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.01),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
-      child: Container(
-        padding: const EdgeInsets.all(8.0),
-        color: Colors.white,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: Colors.grey[50]!),
-            borderRadius: BorderRadius.circular(8.0),
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                color: Colors.grey.shade400.withOpacity(0.3),
-                spreadRadius: 2,
-                blurRadius: 5,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Card(
-            shape: RoundedRectangleBorder(
-              side: const BorderSide(color: Colors.white, width: 0.0),
-              borderRadius: BorderRadius.circular(10.0),
+  @override
+  Widget build(BuildContext context) {
+    final disabled = onTap == null;
+    final color = disabled
+        ? Theme.of(context).disabledColor
+        : Theme.of(context).colorScheme.onSurface;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Tooltip(
+          message: tooltip,
+          child: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: Theme.of(context).dividerColor),
             ),
-            color: Colors.white,
-            elevation: 0.1,
-            child: Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        width: 40.0,
-                        height: 40.0,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.grey, width: 1.0),
-                        ),
-                        child: Stack(
-                          children: [
-                            if (record['employee_profile_url'] != null &&
-                                record['employee_profile_url'].isNotEmpty)
-                              Positioned.fill(
-                                child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl + record['employee_profile_url'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
-                                ),
-                              ),
-                            if (record['employee_profile_url'] == null ||
-                                record['employee_profile_url'].isEmpty)
-                              Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: Colors.grey[400],
-                                  ),
-                                  child: const Icon(Icons.person),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                      SizedBox(width: MediaQuery.of(context).size.width * 0.01),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              fullName ?? '',
-                              style: const TextStyle(
-                                  fontSize: 16.0, fontWeight: FontWeight.bold),
-                              maxLines: 2,
-                            ),
-                            Text(
-                              record['badge_id'] != null
-                                  ? '${record['badge_id']}'
-                                  : '',
-                              style: const TextStyle(
-                                  fontSize: 12.0,
-                                  fontWeight: FontWeight.normal),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.005),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Date',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text(record['attendance_date'] ?? 'None'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Check-In',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text(record['attendance_clock_in'] ?? 'None'),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Shift',
-                        style: TextStyle(color: Colors.grey.shade700),
-                      ),
-                      Text(record['shift_name'] ?? 'None'),
-                    ],
-                  ),
-                  SizedBox(height: MediaQuery.of(context).size.height * 0.01),
-                ],
-              ),
-            ),
+            alignment: Alignment.center,
+            child: child ?? Icon(icon, size: 20, color: color),
           ),
         ),
       ),
@@ -6231,29 +1166,500 @@ class _AttendanceAttendance extends State<AttendanceAttendance>
   }
 }
 
-class _TimeInputFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(
-      TextEditingValue oldValue, TextEditingValue newValue) {
-    final text = newValue.text;
+class _MonthlyAttendanceCard extends StatelessWidget {
+  final MonthlyAttendanceRow row;
 
-    if (text.length == 1 && int.tryParse(text)! > 2) {
-      return TextEditingValue(
-          text: '0$text:', selection: const TextSelection.collapsed(offset: 3));
-    } else if (text.length == 3) {
-      return TextEditingValue(
-          text: '${text.substring(0, 2)}:${text.substring(2)}',
-          selection: const TextSelection.collapsed(offset: 4));
-    } else if (text.length == 4) {
-      return TextEditingValue(
-          text: '${text.substring(0, 2)}:${text.substring(2)}',
-          selection: const TextSelection.collapsed(offset: 5));
-    } else if (text.length > 5) {
-      return TextEditingValue(
-        text: text.substring(0, 5),
-        selection: const TextSelection.collapsed(offset: 5),
-      );
+  const _MonthlyAttendanceCard({required this.row});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    final bg = row.isOff
+        ? theme.colorScheme.surfaceVariant.withOpacity(0.55)
+        : theme.colorScheme.surface;
+
+    final titleText = _formatDate(row.date);
+
+    final cleanedShift = _cleanText(row.shiftInformation);
+    final shiftLabel = (cleanedShift.trim().isEmpty)
+        ? 'No Shift Information'
+        : cleanedShift;
+    final workTypeLabel = _cleanWorkType(row.workType);
+
+    final checkInText = _formatCheckInOut(_cleanText(row.checkIn), row.date);
+    final checkOutText = _formatCheckInOut(_cleanText(row.checkOut), row.date);
+
+    return Card(
+      color: bg,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${row.no ?? ''}${row.no == null ? '' : '. '} $titleText'.trim(),
+              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (workTypeLabel.isNotEmpty)
+                  _Badge(
+                    text: workTypeLabel,
+                    icon: Icons.badge,
+                  ),
+                _Badge(
+                  text: shiftLabel,
+                  icon: Icons.schedule,
+                ),
+              ],
+            ),
+          ],
+        ),
+        children: [
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _InfoCell(
+                  label: 'Check In',
+                  value: checkInText,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _InfoCell(
+                  label: 'Check Out',
+                  value: checkOutText,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _InfoCell(
+                  label: 'Late',
+                  value: _formatPenaltyText(row.lateMinutes, row.late),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _InfoCell(
+                  label: 'Early Out',
+                  value: _formatPenaltyText(row.earlyOutMinutes, row.earlyOut),
+                ),
+              ),
+            ],
+          ),
+          if (row.note.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: _InfoCell(
+                label: 'Note',
+                value: _cleanText(row.note),
+                multiline: true,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Attempts to remove odd characters coming from backend responses.
+  /// - strips HTML tags
+  /// - decodes common HTML entities
+  /// - removes NBSP/zero-width
+  /// - fixes common mojibake (UTF-8 mis-decoded as latin1)
+  static String _cleanText(String input) {
+    var s = input;
+    if (s.isEmpty) return s;
+
+    // Remove HTML tags.
+    s = s.replaceAll(RegExp(r'<[^>]*>'), ' ');
+
+    // Decode common HTML entities.
+    s = s
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&#x27;', "'");
+
+    // Remove NBSP and zero-width characters.
+    s = s
+        .replaceAll('\u00A0', ' ')
+        .replaceAll(RegExp('[\u200B-\u200D\uFEFF]'), ' ');
+
+    // Fix common mojibake patterns.
+    if (s.contains('Ã') || s.contains('Â') || s.contains('â')) {
+      try {
+        final bytes = latin1.encode(s);
+        final decoded = utf8.decode(bytes, allowMalformed: true);
+        s = decoded;
+      } catch (_) {
+        s = s.replaceAll('Â', '');
+      }
     }
-    return newValue;
+
+    // Normalize fancy dashes/quotes.
+    s = s
+        .replaceAll('–', '-')
+        .replaceAll('—', '-')
+        .replaceAll('“', '"')
+        .replaceAll('”', '"')
+        .replaceAll('’', "'");
+
+    // Collapse whitespace.
+    s = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return s;
+  }
+
+  static String _cleanWorkType(String raw) {
+    final t = _cleanText(raw);
+    if (t.isEmpty || t.toLowerCase() == 'null') return '-';
+
+    // For holiday / no-work-type rows, show a normal dash just like Check In / Check Out
+    // instead of rendering odd punctuation or mojibake characters.
+    if (!RegExp(r'[A-Za-z0-9]').hasMatch(t)) return '-';
+
+    return t;
+  }
+
+  static String _safeText(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty || t.toLowerCase() == 'null') return '-';
+    return t;
+  }
+
+
+  static String _formatPenaltyText(String minuteValue, String legacyValue) {
+    final minuteText = minuteValue.trim();
+    if (minuteText.isNotEmpty) {
+      return '$minuteText Minutes';
+    }
+    return _safeText(legacyValue);
+  }
+
+  static String _formatDate(String rawDate) {
+    final t = rawDate.trim();
+    if (t.isEmpty) return '-';
+    final dt = DateTime.tryParse(t);
+    if (dt == null) return t;
+    return DateFormat('dd MMM yyyy').format(dt);
+  }
+
+  /// D+1 handling (ONLY for Check In / Check Out on this page):
+  /// - If backend already sends "D+1" inside string -> show as-is.
+  /// - If backend sends raw datetime (parseable) -> show HH:mm (+ "D+1" if date is next day relative to row.date).
+  /// - Else show raw.
+  static String _formatCheckInOut(String raw, String rowDate) {
+    final v = raw.trim();
+    if (v.isEmpty || v.toLowerCase() == 'null') return '-';
+
+    if (v.contains('D+1')) return v;
+
+    // If it's already just a time, show as-is.
+    final timeOnly = RegExp(r'^\d{1,2}:\d{2}$');
+    if (timeOnly.hasMatch(v)) return v;
+
+    final dt = DateTime.tryParse(v);
+    if (dt == null) return v;
+
+    final timeText = DateFormat('HH:mm').format(dt);
+
+    final rd = DateTime.tryParse(rowDate.trim());
+    if (rd != null) {
+      final rowD = DateTime(rd.year, rd.month, rd.day);
+      final dtD = DateTime(dt.year, dt.month, dt.day);
+      if (dtD.difference(rowD).inDays == 1) {
+        return '$timeText D+1';
+      }
+    }
+
+    return timeText;
+  }
+}
+
+class _Badge extends StatelessWidget {
+  final String text;
+  final IconData icon;
+
+  const _Badge({required this.text, required this.icon});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        color: theme.colorScheme.primaryContainer.withOpacity(0.45),
+      ),
+      // Use RichText so the badge content can wrap nicely on small screens.
+      child: Text.rich(
+        TextSpan(
+          children: [
+            WidgetSpan(
+              alignment: PlaceholderAlignment.middle,
+              child: Icon(icon, size: 14),
+            ),
+            const WidgetSpan(child: SizedBox(width: 6)),
+            TextSpan(text: text),
+          ],
+        ),
+        softWrap: true,
+      ),
+    );
+  }
+}
+
+class _InfoCell extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool multiline;
+
+  const _InfoCell({
+    required this.label,
+    required this.value,
+    this.multiline = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.dividerColor.withOpacity(0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.65),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            maxLines: multiline ? null : 1,
+            overflow: multiline ? TextOverflow.visible : TextOverflow.ellipsis,
+            style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MonthlyAttendanceSummarySection extends StatelessWidget {
+  final MonthlyAttendanceSummary summary;
+
+  const _MonthlyAttendanceSummarySection({required this.summary});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: _SummaryMetricCard(
+                  label: 'LATE',
+                  minutes: summary.lateMinutes,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _SummaryMetricCard(
+                  label: 'EARLY OUT',
+                  minutes: summary.earlyOutMinutes,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _SummaryMetricCard(
+            label: 'TOTAL LATE + EARLY OUT',
+            minutes: summary.totalMinutes,
+            fullWidth: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryMetricCard extends StatelessWidget {
+  final String label;
+  final String minutes;
+  final bool fullWidth;
+
+  const _SummaryMetricCard({
+    required this.label,
+    required this.minutes,
+    this.fullWidth = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Container(
+      width: fullWidth ? double.infinity : null,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: theme.dividerColor.withOpacity(0.6)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.7,
+              color: theme.colorScheme.onSurface.withOpacity(0.72),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            crossAxisAlignment: WrapCrossAlignment.end,
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              Text(
+                '$minutes',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text(
+                  'Minutes',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface.withOpacity(0.70),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmployeePickerDialog extends StatefulWidget {
+  final List<_EmployeeOption> options;
+  final int? initialSelectedId;
+
+  const _EmployeePickerDialog({
+    required this.options,
+    required this.initialSelectedId,
+  });
+
+  @override
+  State<_EmployeePickerDialog> createState() => _EmployeePickerDialogState();
+}
+
+class _EmployeePickerDialogState extends State<_EmployeePickerDialog> {
+  late final TextEditingController _controller;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+    _controller.addListener(() {
+      if (!mounted) return;
+      setState(() {
+        _query = _controller.text;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final availableHeight = mq.size.height - mq.viewInsets.bottom;
+    final dialogHeight = (availableHeight * 0.70).clamp(320.0, 520.0);
+
+    final q = _query.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? widget.options
+        : widget.options.where((e) => e.name.toLowerCase().contains(q)).toList();
+
+    return AlertDialog(
+      title: const Text('Select Employee'),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: dialogHeight,
+        child: Column(
+          children: [
+            TextField(
+              controller: _controller,
+              decoration: const InputDecoration(
+                hintText: 'Search employee',
+                border: OutlineInputBorder(),
+                isDense: true,
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: filtered.isEmpty
+                  ? const Center(child: Text('No employees found'))
+                  : ListView.separated(
+                itemCount: filtered.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final e = filtered[index];
+                  final selected = e.id == widget.initialSelectedId;
+                  return ListTile(
+                    dense: true,
+                    title: Text(e.name),
+                    trailing: selected ? const Icon(Icons.check) : null,
+                    onTap: () => Navigator.of(context).pop(e),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
   }
 }

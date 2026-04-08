@@ -75,11 +75,11 @@ dependencies:
   flutter_ringtone_player: ^4.0.0+3
   flutter_html: ^3.0.0-beta.2
   webview_flutter: ^4.8.0
-#  flutter_quill: ^10.5.5
+  #  flutter_quill: ^10.5.5
   animated_bottom_navigation_bar: ^1.3.3
   geolocator: ^13.0.2
   camera: ^0.10.1
-#  flutter_face_api_beta: ^0.0.121
+  #  flutter_face_api_beta: ^0.0.121
   flutter_map: ^6.0.1
   latlong2: ^0.9.1
   flutter_map_animations: ^0.6.0
@@ -88,6 +88,7 @@ dependencies:
   image: ^4.3.0
   google_ml_kit: ^0.20.0
   flutter_face_api: ^7.1.325
+  share_plus: ^10.0.2
 
 dependency_overrides:
   flutter_keyboard_visibility: ^6.0.0

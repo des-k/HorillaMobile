@@ -3,12 +3,12 @@ import 'dart:convert';
 import 'dart:io';
 // import 'package:flutter_face_api_beta/flutter_face_api.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
-import 'package:timeago/timeago.dart' as timeago;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'attendance_views/attendance_attendance.dart';
+import 'attendance_views/attendance_punching_history.dart';
 import 'attendance_views/attendance_overview.dart';
 import 'attendance_views/attendance_request.dart';
 import 'attendance_views/hour_account.dart';
@@ -25,6 +25,7 @@ import 'horilla_leave/my_leave_request.dart';
 import 'horilla_leave/selected_leave_type.dart';
 import 'horilla_main/login.dart';
 import 'horilla_main/home.dart';
+import 'horilla_main/notification_router.dart';
 import 'horilla_main/notifications_list.dart';
 import 'package:http/http.dart' as http;
 
@@ -46,24 +47,11 @@ Map<String, dynamic> newNotificationList = {};
 bool isAuthenticated = false;
 
 @pragma('vm:entry-point')
-Future<void> notificationTapBackground(NotificationResponse notificationResponse) async {
-  if (!isAuthenticated) return;
-
-  print('notification(${notificationResponse.id}) action tapped: '
-      '${notificationResponse.actionId} with'
-      ' payload: ${notificationResponse.payload}');
-  if (notificationResponse.input?.isNotEmpty ?? false) {
-    final context = await navigatorKey.currentState?.context;
-    if (context != null) {
-      _onSelectNotification(context);
-    }
-    print('notification action tapped with input: ${notificationResponse.input}');
-  }
-}
+Future<void> notificationTapBackground(NotificationResponse notificationResponse) async {}
 
 void _startNotificationTimer() {
   _notificationTimer?.cancel();
-  _notificationTimer = Timer.periodic(Duration(seconds: 3), (timer) {
+  _notificationTimer = Timer.periodic(const Duration(seconds: 20), (timer) {
     if (isAuthenticated) {
       fetchNotifications();
       unreadNotificationsCount();
@@ -96,9 +84,17 @@ Future<void> main() async {
   await flutterLocalNotificationsPlugin.initialize(
     initializationSettings,
     onDidReceiveNotificationResponse: (NotificationResponse details) async {
-      final context = await navigatorKey.currentState?.context;
-      if (context != null && isAuthenticated) {
-        _onSelectNotification(context);
+      final context = navigatorKey.currentContext;
+      if (context == null || !isAuthenticated) return;
+      final record = notificationRecordFromSerializedPayload(details.payload);
+      final recordId = int.tryParse((record?['id'] ?? '').toString());
+      if (recordId != null) {
+        await markNotificationRead(recordId);
+      }
+      if (record != null) {
+        await openNotificationFromRecord(context, record);
+      } else {
+        Navigator.pushNamed(context, '/notifications_list');
       }
     },
     onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
@@ -123,9 +119,15 @@ void clearSharedPrefs() async {
   await prefs.remove('checkin');
 }
 
-void _onSelectNotification(BuildContext context) {
+Future<void> _onSelectNotification(BuildContext context, {Map<String, dynamic>? record}) async {
+  if (record != null) {
+    if (record['id'] != null) {
+      await markNotificationRead(record['id'] as int);
+    }
+    await openNotificationFromRecord(context, record);
+    return;
+  }
   Navigator.pushNamed(context, '/notifications_list');
-  markAllReadNotification();
 }
 
 void _showNotification() async {
@@ -144,17 +146,17 @@ void _showNotification() async {
 
   const NotificationDetails platformChannelSpecifics =
   NotificationDetails(android: androidPlatformChannelSpecifics);
-  final timestamp = DateTime.parse(newNotificationList['timestamp']);
-  final timeAgo = timeago.format(timestamp);
-  final user = arguments['employee_name'];
-  print('$timeAgo by User $user');
+  final record = Map<String, dynamic>.from(newNotificationList);
+  final body = extractNotificationMessage(record);
+
+  final notificationId = int.tryParse((record['id'] ?? '').toString()) ?? 0;
 
   await flutterLocalNotificationsPlugin.show(
-    newNotificationList['id'],
-    newNotificationList['verb'],
-    '$timeAgo by User',
+    notificationId,
+    record['verb'],
+    body,
     platformChannelSpecifics,
-    payload: 'your_payload',
+    payload: jsonEncode(record),
   );
 }
 
@@ -169,39 +171,49 @@ Future<void> prefetchData() async {
   if (token == null || typed_serverUrl == null || employeeId == null) return;
 
   var uri = Uri.parse('$typed_serverUrl/api/employee/employees/$employeeId');
-  var response = await http.get(uri, headers: {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer $token",
-  });
 
-  if (response.statusCode == 200) {
-    final responseData = jsonDecode(response.body);
-    arguments = {
-      'employee_id': responseData['id'],
-      'employee_name': responseData['employee_first_name'] +
-          ' ' +
-          responseData['employee_last_name'],
-      'badge_id': responseData['badge_id'],
-      'email': responseData['email'],
-      'phone': responseData['phone'],
-      'date_of_birth': responseData['dob'],
-      'gender': responseData['gender'],
-      'address': responseData['address'],
-      'country': responseData['country'],
-      'state': responseData['state'],
-      'city': responseData['city'],
-      'qualification': responseData['qualification'],
-      'experience': responseData['experience'],
-      'marital_status': responseData['marital_status'],
-      'children': responseData['children'],
-      'emergency_contact': responseData['emergency_contact'],
-      'emergency_contact_name': responseData['emergency_contact_name'],
-      'employee_work_info_id': responseData['employee_work_info_id'],
-      'employee_bank_details_id': responseData['employee_bank_details_id'],
-      'employee_profile': responseData['employee_profile'],
-      'job_position_name': responseData['job_position_name']
-    };
+  try {
+    final response = await http.get(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    }).timeout(const Duration(seconds: 5));
+
+    if (response.statusCode == 200) {
+      final responseData = jsonDecode(response.body);
+      arguments = {
+        'employee_id': responseData['id'],
+        'employee_name': responseData['employee_first_name'] +
+            ' ' +
+            responseData['employee_last_name'],
+        'badge_id': responseData['badge_id'],
+        'email': responseData['email'],
+        'phone': responseData['phone'],
+        'date_of_birth': responseData['dob'],
+        'gender': responseData['gender'],
+        'address': responseData['address'],
+        'country': responseData['country'],
+        'state': responseData['state'],
+        'city': responseData['city'],
+        'qualification': responseData['qualification'],
+        'experience': responseData['experience'],
+        'marital_status': responseData['marital_status'],
+        'children': responseData['children'],
+        'emergency_contact': responseData['emergency_contact'],
+        'emergency_contact_name': responseData['emergency_contact_name'],
+        'employee_work_info_id': responseData['employee_work_info_id'],
+        'employee_bank_details_id': responseData['employee_bank_details_id'],
+        'employee_profile': responseData['employee_profile'],
+        'job_position_name': responseData['job_position_name']
+      };
+    }
+  } on TimeoutException catch (e) {
+    debugPrint('prefetchData timeout: $e');
+  } on SocketException catch (e) {
+    debugPrint('prefetchData socket error: $e');
+  } catch (e) {
+    debugPrint('prefetchData error: $e');
   }
+
 }
 
 Future<void> markAllReadNotification() async {
@@ -223,6 +235,25 @@ Future<void> markAllReadNotification() async {
     notifications.clear();
     unreadNotificationsCount();
     fetchNotifications();
+  }
+}
+
+Future<void> markNotificationRead(int notificationId) async {
+  if (!isAuthenticated) return;
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString('token');
+  final typedServerUrl = prefs.getString('typed_url');
+  if (token == null || typedServerUrl == null) return;
+
+  final uri = Uri.parse('$typedServerUrl/api/notifications/notifications/$notificationId/');
+  final response = await http.post(uri, headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer $token',
+  });
+
+  if (response.statusCode == 200) {
+    notifications = notifications.where((item) => item['id'] != notificationId).toList();
+    await unreadNotificationsCount();
   }
 }
 
@@ -261,12 +292,13 @@ Future<void> fetchNotifications() async {
       );
 
       if (fetchedNotifications.isNotEmpty) {
-        newNotificationList = fetchedNotifications[0];
-        List<int> newNotificationIds = fetchedNotifications
+        final unseen = fetchedNotifications.where((notification) => !seenNotificationIds.contains(notification['id'] as int)).toList();
+        newNotificationList = unseen.isNotEmpty ? unseen.first : fetchedNotifications.first;
+        final List<int> newNotificationIds = fetchedNotifications
             .map((notification) => notification['id'] as int)
             .toList();
 
-        bool hasNewNotifications = newNotificationIds.any((id) => !seenNotificationIds.contains(id));
+        final bool hasNewNotifications = unseen.isNotEmpty;
 
         if (!isFirstFetch && hasNewNotifications) {
           _playNotificationSound();
@@ -276,10 +308,6 @@ Future<void> fetchNotifications() async {
         notifications = fetchedNotifications;
         notificationsCount = jsonDecode(response.body)['count'];
         isFirstFetch = false;
-        final timestamp = DateTime.parse(newNotificationList['timestamp']);
-        final timeAgo = timeago.format(timestamp);
-        final user = arguments['employee_name'];
-        print('$timeAgo by User $user');
         isLoading = false;
       } else {
         print("No notifications available.");
@@ -348,6 +376,7 @@ class LoginApp extends StatelessWidget {
         '/employees_form': (context) => EmployeeFormPage(),
         '/attendance_overview': (context) => AttendanceOverview(),
         '/attendance_attendance': (context) => AttendanceAttendance(),
+        '/attendance_punching_history': (context) => AttendancePunchingHistoryPage(),
         '/attendance_request': (context) => AttendanceRequest(),
         '/my_attendance_view': (context) => MyAttendanceViews(),
         '/employee_hour_account': (context) => HourAccountFormPage(),
@@ -396,6 +425,22 @@ class FutureBuilderPage extends StatefulWidget {
 class _FutureBuilderPageState extends State<FutureBuilderPage> {
   late Future<bool> _futurePath;
 
+  bool _hasUsableValue(String? value) {
+    return value != null && value.trim().isNotEmpty;
+  }
+
+  bool _hasUsableServerUrl(String? value) {
+    if (!_hasUsableValue(value)) {
+      return false;
+    }
+    final uri = Uri.tryParse(value!.trim());
+    if (uri == null) {
+      return false;
+    }
+    return (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.trim().isNotEmpty;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -404,7 +449,9 @@ class _FutureBuilderPageState extends State<FutureBuilderPage> {
 
   Future<bool> _initialize() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString("token") != null;
+    final token = prefs.getString("token");
+    final typedUrl = prefs.getString("typed_url");
+    return _hasUsableValue(token) && _hasUsableServerUrl(typedUrl);
   }
 
   @override

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../res/utilities/permission_guard.dart';
 import 'package:multiselect_dropdown_flutter/multiselect_dropdown_flutter.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
@@ -43,11 +44,14 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
   bool permissionMyLeaveRequestCheck = false;
   bool permissionLeaveAllocationCheck = false;
   late String getToken = '';
+  String? _permissionStatusMessage;
+  late Future<void> _permissionFuture;
 
 
   @override
   void initState() {
     super.initState();
+    _permissionFuture = checkPermissions();
     getSelectedLeaveType();
     getAllAssignedLeave();
     getAssignedLeaveType();
@@ -65,87 +69,79 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
     });
   }
 
+  void _rememberPermissionMessage(String? message) {
+    if (message == null || message.trim().isEmpty) {
+      return;
+    }
+    _permissionStatusMessage ??= message;
+  }
+
+  Future<void> _retryPermissionChecks() async {
+    setState(() {
+      _permissionFuture = checkPermissions();
+    });
+    await _permissionFuture;
+  }
+
   Future<void> checkPermissions() async {
-    await permissionLeaveOverviewChecks();
-    await permissionLeaveTypeChecks();
-    await permissionLeaveRequestChecks();
-    await permissionLeaveAssignChecks();
-  }
-
-  Future<void> permissionLeaveOverviewChecks() async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-perm/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        permissionMyLeaveRequestCheck = true;
+        permissionLeaveOverviewCheck = false;
+        permissionLeaveTypeCheck = false;
+        permissionLeaveRequestCheck = false;
+        permissionLeaveAssignCheck = false;
+        permissionLeaveAllocationCheck = false;
+        _permissionStatusMessage = 'Server error. Try again later.';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      permissionMyLeaveRequestCheck = true;
+      permissionLeaveOverviewCheck = false;
+      permissionLeaveTypeCheck = false;
+      permissionLeaveRequestCheck = false;
+      permissionLeaveAssignCheck = false;
+      permissionLeaveAllocationCheck = false;
+      _permissionStatusMessage = null;
     });
-    if (response.statusCode == 200) {
+
+    Future<void> runCheck(String path, VoidCallback onAllowed) async {
+      final result = await guardedPermissionGet(
+        Uri.parse('$typedServerUrl$path'),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        if (result.isAllowed) {
+          onAllowed();
+        } else if (!result.isForbidden) {
+          _rememberPermissionMessage(result.message);
+        }
+      });
+    }
+
+    await runCheck('/api/leave/check-perm/', () {
       permissionLeaveOverviewCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveTypeChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-type/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-type/', () {
       permissionLeaveTypeCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveRequestChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-request/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-request/', () {
       permissionLeaveRequestCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveAssignChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-assign/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-assign/', () {
       permissionLeaveAssignCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
+    });
   }
 
   void showAssignAnimation() {
@@ -579,16 +575,24 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
                   SizedBox(
                       height: MediaQuery.of(context).size.height * 0.00),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Carryforward Type',
-                        style:
-                        TextStyle(fontSize: 16.0, color: Colors.grey),
+                      const Expanded(
+                        child: Text(
+                          'Carryforward Type',
+                          style:
+                          TextStyle(fontSize: 16.0, color: Colors.grey),
+                        ),
                       ),
-                      Text(
-                        '${typeDetails['carryforward_type'] ?? "Unknown"}',
-                        style: const TextStyle(fontSize: 16.0),
+                      const SizedBox(width: 12),
+                      Flexible(
+                        child: Text(
+                          '${typeDetails['carryforward_type'] ?? "Unknown"}',
+                          style: const TextStyle(fontSize: 16.0),
+                          textAlign: TextAlign.right,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                   ),
@@ -921,7 +925,7 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
       ),
       drawer: Drawer(
         child: FutureBuilder<void>(
-          future: checkPermissions(),
+          future: _permissionFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               // Show shimmer effect while waiting
@@ -969,6 +973,7 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
                       ),
                     ),
                   ),
+                  permissionNoticeTile(_permissionStatusMessage, onRetry: _retryPermissionChecks),
                   permissionLeaveOverviewCheck
                       ? ListTile(
                     title: const Text('Overview'),
@@ -1005,6 +1010,7 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
                   )
                       : const SizedBox.shrink(),
 
+                  /*
                   permissionLeaveAllocationCheck
                       ? ListTile(
                     title: const Text('Leave Allocation Request'),
@@ -1014,6 +1020,7 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
                     },
                   )
                       : const SizedBox.shrink(),
+                   */
 
                   permissionLeaveAssignCheck
                       ? ListTile(
@@ -1031,66 +1038,72 @@ class _SelectedLeaveType extends State<SelectedLeaveType> {
         ),
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
-        /// Provide NotchBottomBarController
-        notchBottomBarController: _controller,
-        color: Colors.red,
-        showLabel: true,
-        notchColor: Colors.red,
-        kBottomRadius: 28.0,
-        kIconSize: 24.0,
+          ? SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: AnimatedNotchBottomBar(
+          /// Provide NotchBottomBarController
+          notchBottomBarController: _controller,
+          color: Colors.red,
+          showLabel: true,
+          notchColor: Colors.red,
+          kBottomRadius: 28.0,
+          kIconSize: 24.0,
 
-        /// restart app if you change removeMargins
-        removeMargins: false,
-        bottomBarWidth: MediaQuery.of(context).size.width * 50,
-        durationInMilliSeconds: 300,
-        bottomBarItems: const [
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+          /// restart app if you change removeMargins
+          removeMargins: false,
+          bottomBarWidth: MediaQuery.of(context).size.width * 50,
+          durationInMilliSeconds: 300,
+          bottomBarItems: const [
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
             ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
-            ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-          ),
-        ],
+          ],
 
-        onTap: (index) async {
-          switch (index) {
-            case 0:
-              Navigator.pushNamed(context, '/home');
-              break;
-            case 1:
-              Navigator.pushNamed(context, '/employee_checkin_checkout');
-              break;
-            case 2:
-              Navigator.pushNamed(context, '/employees_form',
-                  arguments: arguments);
-              break;
-          }
-        },
+          onTap: (index) async {
+            switch (index) {
+              case 0:
+                Navigator.pushNamed(context, '/home');
+                break;
+              case 1:
+                Navigator.pushNamed(context, '/employee_checkin_checkout');
+                break;
+              case 2:
+                Navigator.pushNamed(context, '/employees_form',
+                    arguments: arguments);
+                break;
+            }
+          },
+        ),
       )
           : null,
     );

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:shimmer/shimmer.dart';
@@ -108,6 +109,7 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
   bool hasMoreRecords = true;
   bool isFetchingMore = false;
   late String getToken = '';
+  String? _permissionStatusMessage;
 
 
   @override
@@ -162,45 +164,39 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
   Future permissionChecks() async {
     if (_permissionsLoaded) return;
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _permissionStatusMessage = 'Server error. Try again later.';
+        _permissionsLoaded = true;
+      });
+      return;
+    }
 
-    try {
-      var uri = Uri.parse(
-          '$typedServerUrl/api/attendance/permission-check/attendance');
-      var response = await http.get(uri, headers: {
+    final result = await guardedPermissionGet(
+      Uri.parse('$typedServerUrl/api/attendance/permission-check/attendance'),
+      headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
-      });
+      },
+    );
 
-      if (response.statusCode == 200) {
-        setState(() {
-          permissionOverview = true;
-          permissionAttendance = true;
-          permissionAttendanceRequest = true;
-          permissionHourAccount = true;
-          _permissionsLoaded = true;
-        });
-      } else {
-        setState(() {
-          permissionOverview = true;
-          permissionAttendance = true;
-          permissionAttendanceRequest = true;
-          permissionHourAccount = true;
-          _permissionsLoaded = true;
-        });
-      }
-    } catch (e) {
-      print('Error checking permissions: $e');
-      setState(() {
+    if (!mounted) return;
+    setState(() {
+      if (result.isAllowed) {
         permissionOverview = true;
         permissionAttendance = true;
         permissionAttendanceRequest = true;
         permissionHourAccount = true;
-        _permissionsLoaded = true;
-      });
-    }
+      } else {
+        _permissionStatusMessage = result.message;
+      }
+      _permissionsLoaded = true;
+    });
   }
+
 
   @override
   void dispose() {
@@ -2048,6 +2044,13 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
                 ),
               ),
             ),
+            permissionNoticeTile(_permissionStatusMessage, onRetry: () {
+              setState(() {
+                _permissionsLoaded = false;
+                _permissionStatusMessage = null;
+              });
+              permissionChecks();
+            }),
             if (permissionOverview)
               ListTile(
                 title: const Text('Overview'),
@@ -2098,7 +2101,12 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
         ),
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
+          ? SafeArea(
+            top: false,
+            left: false,
+            right: false,
+            bottom: true,
+            child: AnimatedNotchBottomBar(
         notchBottomBarController: _controller,
         color: Colors.red,
         showLabel: true,
@@ -2154,7 +2162,8 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
               break;
           }
         },
-      )
+      ),
+          )
           : null,
     );
   }

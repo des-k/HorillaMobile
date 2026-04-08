@@ -1,9 +1,5 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:horilla/employee_views/rotating_shift.dart';
-import 'package:horilla/employee_views/rotating_work_type.dart';
-import 'package:horilla/employee_views/shift_request.dart';
-import 'package:horilla/employee_views/work_type_request.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
@@ -163,15 +159,13 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    // Employee detail now only has a single tab (About).
+    // The previous "Work Type & Shift" tab was removed.
+    _tabController = TabController(length: 1, vsync: this);
     prefetchData();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       getEmployeeDetails();
       getBaseUrl();
-      getWorkTypeRequest();
-      getRotatingWorkTypeRequest();
-      getShiftRequest();
-      getRotatingShiftRequest();
       _loadEmployeeData();
       getEmployees();
       getWorkType();
@@ -224,6 +218,22 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     setState(() {
       baseUrl = typedServerUrl ?? '';
     });
+  }
+
+
+  String _absoluteMediaUrl(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return '';
+    if (value.startsWith('http://') || value.startsWith('https://')) return value;
+    if (baseUrl.trim().isEmpty) return value;
+    if (value.startsWith('/')) return '${baseUrl.trim()}$value';
+    return '${baseUrl.trim()}/$value';
+  }
+
+  bool _hasHomeCoordinates(Map<String, dynamic> wfhProfile) {
+    final lat = (wfhProfile['home_latitude'] ?? '').toString().trim();
+    final lng = (wfhProfile['home_longitude'] ?? '').toString().trim();
+    return lat.isNotEmpty && lat.toLowerCase() != 'none' && lng.isNotEmpty && lng.toLowerCase() != 'none';
   }
 
   void prefetchData() async {
@@ -293,43 +303,12 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Future<void> getWorkTypeRequest() async {
-    final args = ModalRoute.of(context)!.settings.arguments as Map;
-    empId = args['employee_id'].toString();
-
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-
-    List<dynamic> allResults = [];
-    int totalCount = 0;
-
-    for (var page = 1;; page++) {
-      var uri = Uri.parse(
-        '$typedServerUrl/api/base/worktype-requests?employee_id=$empId&page=$page',
-      );
-
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final results = data['results'];
-
-        if (results.isEmpty) break; // ✅ stop if no more data
-
-        allResults.addAll(results);
-        totalCount = data['count'];
-      } else {
-        print('Failed to load work type requests. Status: ${response.statusCode}');
-        break;
-      }
-    }
-
+    // Work Type Requests moved out of Employee Profile into Attendance > Requests.
+    // Keep the legacy helper as a no-op so removed UI paths cannot hit obsolete APIs.
+    if (!mounted) return;
     setState(() {
-      employeeWorkTypeRequest = allResults;
-      employeeWorkTypeRequestCount = totalCount;
+      employeeWorkTypeRequest = [];
+      employeeWorkTypeRequestCount = 0;
     });
   }
 
@@ -1065,56 +1044,11 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
   Future<void> createWorkTypeRequest(
       Map<String, dynamic> createdDetails) async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/base/worktype-requests/');
-    var response = await http.post(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        "employee_id": createdDetails['employee_id'],
-        "requested_date": createdDetails['requested_date'],
-        "requested_till": createdDetails['requested_till'],
-        "description": createdDetails['description'],
-        "work_type_id": createdDetails['work_type_id'],
-      }),
-    );
-    if (response.statusCode == 201) {
-      _errorMessage = null;
-      getWorkTypeRequest();
-      setState(() {});
-    } else {
-      var responseData = jsonDecode(response.body);
-      if (responseData.containsKey('non_field_errors')) {
-        _errorMessage = responseData['non_field_errors'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('requested_date')) {
-        _errorMessage = responseData['requested_date'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('requested_till')) {
-        _errorMessage = responseData['requested_till'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('description')) {
-        _errorMessage = responseData['description'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('work_type_id')) {
-        _errorMessage = responseData['work_type_id'].join('\n');
-        setState(() {});
-      }
-      if (responseData.containsKey('employee_id')) {
-        _errorMessage = responseData['employee_id'].join('\n');
-        setState(() {});
-      }
-      setState(() {});
-    }
+    // Work Type Requests are now created from Attendance > Requests using the
+    // canonical attendance work-mode flow.
+    _errorMessage = 'Work Type Requests are available in Attendance > Requests.';
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> createRotatingWorkTypeRequest(
@@ -3554,73 +3488,79 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
         ],
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
-        /// Provide NotchBottomBarController
-        notchBottomBarController: _controller,
-        color: Colors.red,
-        showLabel: true,
-        notchColor: Colors.red,
-        kBottomRadius: 28.0,
-        kIconSize: 24.0,
+          ? SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: AnimatedNotchBottomBar(
+          /// Provide NotchBottomBarController
+          notchBottomBarController: _controller,
+          color: Colors.red,
+          showLabel: true,
+          notchColor: Colors.red,
+          kBottomRadius: 28.0,
+          kIconSize: 24.0,
 
-        /// restart app if you change removeMargins
-        removeMargins: false,
-        bottomBarWidth: MediaQuery.of(context).size.width * 1,
-        durationInMilliSeconds: 500,
-        bottomBarItems: const [
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+          /// restart app if you change removeMargins
+          removeMargins: false,
+          bottomBarWidth: MediaQuery.of(context).size.width * 1,
+          durationInMilliSeconds: 500,
+          bottomBarItems: const [
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
             ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
-            ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-          ),
-        ],
+          ],
 
-        onTap: (index) async {
-          switch (index) {
-            case 0:
-              Future.delayed(const Duration(milliseconds: 1000), () {
-                Navigator.pushNamed(context, '/home');
-              });
-              break;
-            case 1:
-              Future.delayed(const Duration(milliseconds: 1000), () {
-                Navigator.pushNamed(
-                    context, '/employee_checkin_checkout');
-              });
-              break;
-            case 2:
-              Future.delayed(const Duration(milliseconds: 1000), () {
-                Navigator.pushNamed(context, '/employees_form',
-                    arguments: arguments);
-              });
-              break;
-          }
-        },
+          onTap: (index) async {
+            switch (index) {
+              case 0:
+                Future.delayed(const Duration(milliseconds: 1000), () {
+                  Navigator.pushNamed(context, '/home');
+                });
+                break;
+              case 1:
+                Future.delayed(const Duration(milliseconds: 1000), () {
+                  Navigator.pushNamed(
+                      context, '/employee_checkin_checkout');
+                });
+                break;
+              case 2:
+                Future.delayed(const Duration(milliseconds: 1000), () {
+                  Navigator.pushNamed(context, '/employees_form',
+                      arguments: arguments);
+                });
+                break;
+            }
+          },
+        ),
       )
           : null,
     );
@@ -3756,11 +3696,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Widget _buildLoadingWidget() {
-    final args =
-    ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    bool permissionCheck = args?['permission_check'] ?? false;
-    bool showWorkTypeAndShiftTab = permissionCheck ||
-        (employeeDetails['id'] != null && employeeDetails['id'] == employeeId);
     return ListView(
       physics: const NeverScrollableScrollPhysics(),
       children: [
@@ -4104,8 +4039,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                   ),
                                   tabs: [
                                     const Tab(text: 'About'),
-                                    if (showWorkTypeAndShiftTab)
-                                      const Tab(text: 'Work Type & Shift'),
                                   ],
                                 ),
                                 SizedBox(
@@ -4144,11 +4077,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Widget _buildEmployeeDetailsWidget(token) {
-    final args =
-    ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    bool permissionCheck = args?['permission_check'] ?? false;
-    bool showWorkTypeAndShiftTab = permissionCheck ||
-        (employeeDetails['id'] != null && employeeDetails['id'] == employeeId);
     return Scrollbar(
       controller: _vertical,
       child: ListView(
@@ -4533,8 +4461,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                   ),
                                   tabs: [
                                     const Tab(text: 'About'),
-                                    if (showWorkTypeAndShiftTab)
-                                      const Tab(text: 'Work Type & Shift'),
                                   ],
                                 ),
                                 SizedBox(
@@ -4548,23 +4474,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                         employeeDetails,
                                         employeeWorkInfoRecord,
                                         employeeBankRecord,
-                                      ),
-                                      buildTabContentWorkTypeAndShift(
-                                        context,
-                                        employeeWorkTypeRequest,
-                                        employeeWorkTypeRequestCount,
-                                        employeeRotatingWorkTypeRequest,
-                                        employeeRotatingWorkTypeRequestCount,
-                                        employeeShiftRequest,
-                                        employeeShiftRequestCount,
-                                        employeeRotatingShiftRequest,
-                                        employeeRotatingShiftRequestCount,
-                                        employeeDetails,
-                                        baseUrl,
-                                        employeeItems,
-                                        employeeIdMap,
-                                        workTypeIdMap,
-                                        workTypeItem,
                                       ),
                                     ],
                                   ),
@@ -4697,7 +4606,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
               physics: const ClampingScrollPhysics(),
               padding: const EdgeInsets.only(
                   bottom: kBottomNavigationBarHeight + 80.0),
-              itemCount: 3,
+              itemCount: 4,
               itemBuilder: (context, index) {
                 String titleText = "";
                 IconData? titleIcon;
@@ -4713,6 +4622,10 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                   case 2:
                     titleText = "Bank Information";
                     titleIcon = Icons.account_balance;
+                    break;
+                  case 3:
+                    titleText = "Geo & Face Info";
+                    titleIcon = Icons.home_work_outlined;
                     break;
                 }
                 return Container(
@@ -5198,6 +5111,61 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                   ),
                                 ),
                               ),
+                            if (index == 3)
+                              Builder(builder: (context) {
+                                final Map<String, dynamic> wfhProfile = employeeDetails['wfh_profile'] is Map
+                                    ? Map<String, dynamic>.from(employeeDetails['wfh_profile'])
+                                    : <String, dynamic>{};
+                                final bool hasHomeCoordinates = _hasHomeCoordinates(wfhProfile);
+                                final String homeLat = (wfhProfile['home_latitude'] ?? '').toString().trim();
+                                final String homeLng = (wfhProfile['home_longitude'] ?? '').toString().trim();
+                                final String radius = (wfhProfile['radius_in_meters'] ?? '-').toString();
+                                final String mapLink = (wfhProfile['google_maps_link'] ?? '').toString().trim();
+                                final String faceImage = _absoluteMediaUrl((wfhProfile['face_image'] ?? '').toString());
+                                return Container(
+                                  color: Colors.white,
+                                  padding: const EdgeInsets.all(12),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text('Active Face Photo', style: TextStyle(fontWeight: FontWeight.bold)),
+                                      const SizedBox(height: 8),
+                                      if (faceImage.isNotEmpty)
+                                        ClipRRect(
+                                          borderRadius: BorderRadius.circular(8),
+                                          child: Image.network(
+                                            faceImage,
+                                            width: 120,
+                                            height: 120,
+                                            fit: BoxFit.cover,
+                                            errorBuilder: (_, __, ___) => const Text('-'),
+                                          ),
+                                        )
+                                      else
+                                        const Text('-'),
+                                      const SizedBox(height: 12),
+                                      if (hasHomeCoordinates) ...[
+                                        Text('Home Latitude: $homeLat'),
+                                        const SizedBox(height: 6),
+                                        Text('Home Longitude: $homeLng'),
+                                      ] else
+                                        const Text('-'),
+                                      const SizedBox(height: 6),
+                                      Text('Radius: $radius meter'),
+                                      if (mapLink.isNotEmpty) ...[
+                                        const SizedBox(height: 8),
+                                        InkWell(
+                                          onTap: () async {
+                                            final uri = Uri.parse(mapLink);
+                                            await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                          },
+                                          child: const Text('Open in Google Maps', style: TextStyle(color: Colors.blue)),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                );
+                              }),
                             if (index == 2)
                               Container(
                                 color: Colors.white,
@@ -5339,364 +5307,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                   ),
                 );
               },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildTabContentWorkTypeAndShift(
-      BuildContext context,
-      List<dynamic> employeeWorkTypeRequest,
-      employeeWorkTypeRequestCount,
-      List<dynamic> employeeRotatingWorkTypeRequest,
-      employeeRotatingWorkTypeRequestCount,
-      List<dynamic> employeeShiftRequest,
-      employeeShiftRequestCount,
-      List<dynamic> employeeRotatingShiftRequest,
-      employeeRotatingShiftRequestCount,
-      Map<String, dynamic> employeeDetails,
-      baseUrl,
-      employeeItems,
-      employeeIdMap,
-      workTypeIdMap,
-      workTypeItems) {
-    final firstName = employeeDetails['employee_first_name'] ?? '';
-    final lastName = employeeDetails['employee_last_name'] ?? '';
-    final fullName = (firstName.isEmpty ? '' : firstName) +
-        (lastName.isEmpty ? '' : ' $lastName');
-    final employeeId = employeeDetails['id'].toString();
-    return Padding(
-      padding: const EdgeInsets.all(4.0),
-      child: ListView(
-        children: [
-          GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => WorkTypeRequestPage(
-                      selectedEmployerId: employeeId,
-                      selectedEmployeeFullName: fullName),
-                ),
-              );
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(left: 15.0),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          labelText: 'Work Type Request',
-                          labelStyle: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black,
-                          ),
-                          enabled: false,
-                          border: InputBorder.none,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: MediaQuery.of(context).size.width * 0.07,
-                            height: MediaQuery.of(context).size.height * 0.03,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.redAccent,
-                            ),
-                            child: Center(
-                              child: Text(
-                                employeeWorkTypeRequestCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: Icon(Icons.arrow_forward_ios,
-                            color: Colors.grey.shade600, size: 16),
-                      )
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => RotatingWorkTypePage(
-                      selectedEmployerId: employeeId,
-                      selectedEmployeeFullName: fullName),
-                ),
-              );
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(left: 15.0),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          labelText: 'Rotating Work Type',
-                          labelStyle: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black,
-                          ),
-                          enabled: false,
-                          border: InputBorder.none,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: MediaQuery.of(context).size.width * 0.07,
-                            height: MediaQuery.of(context).size.height * 0.03,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.redAccent,
-                            ),
-                            child: Center(
-                              child: Text(
-                                employeeRotatingWorkTypeRequestCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: Icon(Icons.arrow_forward_ios,
-                            color: Colors.grey.shade600, size: 16),
-                      )
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ShiftRequestPage(
-                      selectedEmployerId: employeeId,
-                      selectedEmployeeFullName: fullName),
-                ),
-              );
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(left: 15.0),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          labelText: 'Shift Request',
-                          labelStyle: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            // fontSize: 15,
-                            color: Colors.black,
-                          ),
-                          enabled: false,
-                          border: InputBorder.none,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: MediaQuery.of(context).size.width * 0.07,
-                            height: MediaQuery.of(context).size.height * 0.03,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.redAccent,
-                            ),
-                            child: Center(
-                              child: Text(
-                                employeeShiftRequestCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: Icon(Icons.arrow_forward_ios,
-                            color: Colors.grey.shade600, size: 16),
-                      )
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => RotatingShiftPage(
-                      selectedEmployerId: employeeId,
-                      selectedEmployeeFullName: fullName),
-                ),
-              );
-            },
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-              child: Row(
-                children: [
-                  const Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(left: 15.0),
-                      child: TextField(
-                        decoration: InputDecoration(
-                          labelText: 'Rotating Shift',
-                          labelStyle: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            // fontSize: 15,
-                            color: Colors.black,
-                          ),
-                          enabled: false,
-                          border: InputBorder.none,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  ),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          Container(
-                            width: MediaQuery.of(context).size.width * 0.07,
-                            height: MediaQuery.of(context).size.height * 0.03,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: Colors.redAccent,
-                            ),
-                            child: Center(
-                              child: Text(
-                                employeeRotatingShiftRequestCount.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 10,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 8),
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: Icon(Icons.arrow_forward_ios,
-                            color: Colors.grey.shade600, size: 16),
-                      )
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          GestureDetector(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-            ),
-          ),
-          const SizedBox(height: 4),
-          GestureDetector(
-            child: Container(
-              height: MediaQuery.of(context).size.height * 0.15,
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
-            ),
-          ),
-          const SizedBox(height: 15),
-          GestureDetector(
-            child: Container(
-              height: MediaQuery.of(context).size.height * 0.15,
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(8.0),
-              ),
             ),
           ),
         ],

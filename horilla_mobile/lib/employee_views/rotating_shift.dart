@@ -2129,7 +2129,12 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
           ? _buildLoadingWidget()
           : _buildEmployeeDetailsWidget(),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
+          ? SafeArea(
+            top: false,
+            left: false,
+            right: false,
+            bottom: true,
+            child: AnimatedNotchBottomBar(
         /// Provide NotchBottomBarController
         notchBottomBarController: _controller,
         color: Colors.red,
@@ -2189,7 +2194,8 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
               break;
           }
         },
-      )
+      ),
+          )
           : null,
     );
   }

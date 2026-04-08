@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:internet_connection_checker/internet_connection_checker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../res/utilities/mobile_attendance_settings.dart';
 import '../main.dart';
 
 class LoginPage extends StatefulWidget {
@@ -15,7 +16,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  late StreamSubscription subscription;
+  StreamSubscription? subscription;
   var isDeviceConnected = false;
   bool isAlertSet = false;
   bool _passwordVisible = false;
@@ -23,8 +24,6 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController usernameController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
   double horizontalMargin = 0.0;
-  Timer? _notificationTimer;
-
 
   @override
   void initState() {
@@ -39,20 +38,21 @@ class _LoginPageState extends State<LoginPage> {
     });
   }
 
-  void _startNotificationTimer() {
-    _notificationTimer?.cancel();
-    _notificationTimer = Timer.periodic(Duration(seconds: 3), (timer) {
-      if (isAuthenticated) {
-        fetchNotifications();
-        unreadNotificationsCount();
-      } else {
-        timer.cancel();
-        _notificationTimer = null;
-      }
-    });
+
+
+  void _showLoginSnackBar(String message) {
+    if (!mounted) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+      ),
+    );
   }
-
-
 
   Future<void> _login() async {
     String serverAddress = serverController.text.trim();
@@ -73,8 +73,7 @@ class _LoginPageState extends State<LoginPage> {
 
         var employeeId = responseBody['employee']?['id'] ?? 0;
         var companyId = responseBody['company_id'] ?? 0;
-        bool face_detection = true;
-        bool geo_fencing = responseBody['geo_fencing'] ?? false;
+        bool face_detection = responseBody['face_detection'] ?? true;
         var face_detection_image = responseBody['face_detection_image']?.toString() ?? '';
 
 
@@ -83,58 +82,31 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.setString("typed_url", serverAddress);
         await prefs.setString("face_detection_image", face_detection_image);
         await prefs.setBool("face_detection", face_detection);
-        await _forceFaceDetectionOn(serverAddress, token);
-        await prefs.setBool("geo_fencing", geo_fencing);
+        await prefs.remove("geo_fencing");
+        final proofSettings = await MobileAttendanceSettingsService.fetchAndCache(serverAddress: serverAddress, token: token);
+        await prefs.setBool("face_detection", proofSettings.faceDetectionEnabled);
+        await prefs.setBool("attendance_location_enabled", proofSettings.locationEnabled);
+        await prefs.remove("geo_fencing");
         await prefs.setInt("employee_id", employeeId);
         await prefs.setInt("company_id", companyId);
 
         isAuthenticated = true;
-        _startNotificationTimer();
         prefetchData();
 
         Navigator.pushReplacementNamed(context, '/home');
+      } else if (response.statusCode >= 500) {
+        _showLoginSnackBar('Server error. Try again later.');
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Invalid email or password'),
-            backgroundColor: Colors.red,
-          ),
-        );
+        _showLoginSnackBar('Invalid email or password');
       }
     } on TimeoutException {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Connection timeout'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showLoginSnackBar('Connection timeout');
     } catch (e) {
       print(e);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Invalid server address'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      _showLoginSnackBar('Invalid server address');
     }
   }
 
-
-  Future<void> _forceFaceDetectionOn(String serverAddress, String token) async {
-    final uri = Uri.parse('$serverAddress/api/facedetection/config/');
-    try {
-      await http.put(
-        uri,
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer $token",
-        },
-        body: jsonEncode({"start": true}),
-      );
-    } catch (_) {
-      // Intentionally ignored. Face detection is enforced in the client anyway.
-    }
-  }
 
   void getConnectivity() {
     // subscription = InternetConnectionChecker().onStatusChange.listen((status) {
@@ -335,7 +307,10 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   void dispose() {
-    subscription.cancel();
+    subscription?.cancel();
+    serverController.dispose();
+    usernameController.dispose();
+    passwordController.dispose();
     super.dispose();
   }
 }

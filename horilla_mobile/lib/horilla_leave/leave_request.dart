@@ -6,6 +6,9 @@ import 'package:intl/intl.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../res/utilities/permission_guard.dart';
+import '../res/utilities/request_payloads.dart';
+import '../res/utilities/leave_request_form_logic.dart';
 import 'package:dropdown_search/dropdown_search.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
@@ -21,13 +24,52 @@ class LeaveRequest extends StatefulWidget {
 class _LeaveRequest extends State<LeaveRequest>
     with SingleTickerProviderStateMixin {
   String _getBreakdown(String breakdownValue) {
-    final breakdownMap = {
-      'full_day': 'Full Day',
-      'second_half': 'Second Half',
-      'first_half': 'First Half',
-    };
+    return leaveBreakdownLabel(breakdownValue);
+  }
 
-    return breakdownMap[breakdownValue] ?? 'Unknown';
+  static const String _fullDayKey = 'full_day';
+  static const String _fullDayLabel = 'Full Day';
+
+  void _applyDefaultFullDayBreakdowns() {
+    editStartDateBreakdown = breakdownMaps[_fullDayKey];
+    editEndDateBreakdown = breakdownMaps[_fullDayKey];
+    selectedStartDateValue = _fullDayKey;
+    selectedEndDateValue = _fullDayKey;
+    _validateStartDateBreakdown = false;
+    _validateEndDateBreakdown = false;
+  }
+
+  Widget _buildBreakdownDropdown({
+    required String label,
+    required String? selectedKey,
+    required bool hasError,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.all(4.0),
+      child: DropdownSearch<String>(
+        items: breakdownMaps.values.toList().cast<String>(),
+        selectedItem: selectedKey == null || selectedKey.isEmpty
+            ? null
+            : breakdownMaps[selectedKey],
+        onChanged: onChanged,
+        popupProps: PopupProps.menu(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.23,
+          ),
+          showSearchBox: false,
+        ),
+        dropdownDecoratorProps: DropDownDecoratorProps(
+          dropdownSearchDecoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            labelText: label,
+            labelStyle: TextStyle(color: Colors.grey[350]),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10.0),
+            errorText: hasError ? 'Please select $label' : null,
+          ),
+        ),
+      ),
+    );
   }
 
   String? _errorMessage;
@@ -46,11 +88,7 @@ class _LeaveRequest extends State<LeaveRequest>
   String filePath = '';
   Map<String, String> employeeIdMap = {};
 
-  Map<String, dynamic> breakdownMaps = {
-    'full_day': 'Full Day',
-    'second_half': 'Second Half',
-    'first_half': 'First Half',
-  };
+  Map<String, dynamic> breakdownMaps = Map<String, dynamic>.from(leaveBreakdownLabels);
   Map<String, String> leaveItemsIdMap = {};
   Map<String, String> employeeItemsIdMap = {};
   final TextEditingController _typeAheadEditController =
@@ -133,6 +171,8 @@ class _LeaveRequest extends State<LeaveRequest>
   TextEditingController descriptionSelect = TextEditingController();
   final TextEditingController _fileNameController = TextEditingController();
   Timer? _debounce;
+  bool _notificationContextHandled = false;
+  int? _notificationRequestId;
 
   bool isFetchingMore = false;
   bool hasMoreAll = true;
@@ -141,12 +181,50 @@ class _LeaveRequest extends State<LeaveRequest>
   bool hasMoreCancelled = true;
   bool hasMoreRejected = true;
   late String getToken = '';
+  String? _permissionStatusMessage;
+  late Future<void> _permissionFuture;
+
 
 
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_notificationContextHandled) return;
+    _notificationContextHandled = true;
+    final routeArgs = ModalRoute.of(context)?.settings.arguments;
+    if (routeArgs is! Map) return;
+    final args = Map<String, dynamic>.from(routeArgs);
+    _notificationRequestId = int.tryParse((args['request_id'] ?? '').toString());
+  }
+
+  void _applyNotificationRequestContext() {
+    final requestId = _notificationRequestId;
+    if (requestId == null) return;
+    int targetTab = 0;
+    if (requestedRecords.any((record) => record['id'].toString() == requestId.toString())) {
+      targetTab = 1;
+    } else if (approvedRecords.any((record) => record['id'].toString() == requestId.toString())) {
+      targetTab = 2;
+    } else if (cancelledRecords.any((record) => record['id'].toString() == requestId.toString())) {
+      targetTab = 3;
+    } else if (rejectedRecords.any((record) => record['id'].toString() == requestId.toString())) {
+      targetTab = 4;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _tabController.animateTo(targetTab);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Opened request #$requestId from notification.')),
+      );
+    });
+    _notificationRequestId = null;
+  }
+
+  @override
   void initState() {
     super.initState();
+    _permissionFuture = checkPermissions();
     currentPage = 1;
     _scrollController.addListener(_scrollListener);
     _tabController = TabController(length: 5, vsync: this);
@@ -182,7 +260,7 @@ class _LeaveRequest extends State<LeaveRequest>
       await getEmployees();
       await getListEmployees();
       await getAllEmployeesName();
-      await checkPermissions();
+      await _permissionFuture;
 
       await Future.wait([
         getAllLeaveRequest(reset: true),
@@ -192,12 +270,14 @@ class _LeaveRequest extends State<LeaveRequest>
         getRejectedCount(reset: true),
       ]);
 
+      _applyNotificationRequestContext();
       setState(() {
         _isShimmerVisible = false;
         isLoading = false;
         _isShimmer = false;
       });
     } catch (e) {
+      _applyNotificationRequestContext();
       setState(() {
         _isShimmerVisible = false;
         isLoading = false;
@@ -207,89 +287,80 @@ class _LeaveRequest extends State<LeaveRequest>
   }
 
 
+  void _rememberPermissionMessage(String? message) {
+    if (message == null || message.trim().isEmpty) {
+      return;
+    }
+    _permissionStatusMessage ??= message;
+  }
+
+  Future<void> _retryPermissionChecks() async {
+    setState(() {
+      _permissionFuture = checkPermissions();
+    });
+    await _permissionFuture;
+  }
+
   Future<void> checkPermissions() async {
-    await permissionLeaveOverviewChecks();
-    await permissionLeaveTypeChecks();
-    await permissionLeaveRequestChecks();
-    await permissionLeaveAssignChecks();
-  }
-
-  Future<void> permissionLeaveOverviewChecks() async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-perm/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        permissionMyLeaveRequestCheck = true;
+        permissionLeaveOverviewCheck = false;
+        permissionLeaveTypeCheck = false;
+        permissionLeaveRequestCheck = false;
+        permissionLeaveAssignCheck = false;
+        permissionLeaveAllocationCheck = false;
+        _permissionStatusMessage = 'Server error. Try again later.';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      permissionMyLeaveRequestCheck = true;
+      permissionLeaveOverviewCheck = false;
+      permissionLeaveTypeCheck = false;
+      permissionLeaveRequestCheck = false;
+      permissionLeaveAssignCheck = false;
+      permissionLeaveAllocationCheck = false;
+      _permissionStatusMessage = null;
     });
-    if (response.statusCode == 200) {
+
+    Future<void> runCheck(String path, VoidCallback onAllowed) async {
+      final result = await guardedPermissionGet(
+        Uri.parse('$typedServerUrl$path'),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        if (result.isAllowed) {
+          onAllowed();
+        } else if (!result.isForbidden) {
+          _rememberPermissionMessage(result.message);
+        }
+      });
+    }
+
+    await runCheck('/api/leave/check-perm/', () {
       permissionLeaveOverviewCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveTypeChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-type/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-type/', () {
       permissionLeaveTypeCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveRequestChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-request/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-request/', () {
       permissionLeaveRequestCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveAssignChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-assign/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-assign/', () {
       permissionLeaveAssignCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
+    });
   }
-
 
   Future<void> prefetchData() async {
     final prefs = await SharedPreferences.getInstance();
@@ -685,6 +756,7 @@ class _LeaveRequest extends State<LeaveRequest>
   void showCreateLeaveDialog(BuildContext context) async {
     final prefs = await SharedPreferences.getInstance();
     var employeeID = prefs.getInt("employee_id");
+    _applyDefaultFullDayBreakdowns();
 
     showDialog(
       context: context,
@@ -696,12 +768,15 @@ class _LeaveRequest extends State<LeaveRequest>
                   AlertDialog(
                     backgroundColor: Colors.white,
                     title: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
-                          "Add Leave",
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold, color: Colors.black),
+                        const Expanded(
+                          child: Text(
+                            "Add Leave",
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold, color: Colors.black),
+                          ),
                         ),
                         IconButton(
                           icon: const Icon(Icons.close),
@@ -737,64 +812,61 @@ class _LeaveRequest extends State<LeaveRequest>
                                     color: Colors.black)),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.01),
-                            TypeAheadField<String>(
-                              textFieldConfiguration: TextFieldConfiguration(
-                                controller: _typeAheadEmployeeCreateController,
-                                decoration: InputDecoration(
-                                  labelText: 'Choose an employee',
-                                  labelStyle: TextStyle(color: Colors.grey[350]),
-                                  border: const OutlineInputBorder(),
-                                  contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10.0),
-                                  errorText: _validateEmployee
-                                      ? 'Please select a leave type'
-                                      : null,
+                            Padding(
+                              padding: const EdgeInsets.all(4.0),
+                              child: DropdownSearch<String>(
+                                items: employeeItem,
+                                selectedItem: editEmployeeType,
+                                onChanged: (newValue) {
+                                  if (newValue != null) {
+                                    setState(() {
+                                      _typeAheadEmployeeCreateController.text = newValue;
+                                      editEmployeeType = newValue;
+                                      selectedEmployee = newValue;
+                                      selectedEmployeeId = employeeIdMap[newValue];
+                                      _typeAheadCreateController.clear();
+                                      editLeaveType = null;
+                                      selectedLeaveId = null;
+                                      leaveItem.clear();
+                                      _validateEmployee = false;
+                                    });
+                                    getLeaveTypes(selectedEmployeeId);
+                                  }
+                                },
+                                dropdownDecoratorProps: DropDownDecoratorProps(
+                                  dropdownSearchDecoration: InputDecoration(
+                                    labelText: 'Choose an employee',
+                                    labelStyle: TextStyle(color: Colors.grey[350]),
+                                    border: const OutlineInputBorder(),
+                                    contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 10.0),
+                                    errorText: _validateEmployee
+                                        ? 'Please select an employee'
+                                        : null,
+                                  ),
+                                ),
+                                popupProps: PopupProps.menu(
+                                  showSearchBox: true,
+                                  constraints: BoxConstraints(
+                                    maxHeight: MediaQuery.of(context).size.height * 0.23,
+                                  ),
+                                  searchFieldProps: TextFieldProps(
+                                    decoration: const InputDecoration(
+                                      hintText: 'Search Employee',
+                                      border: OutlineInputBorder(),
+                                      contentPadding:
+                                      EdgeInsets.symmetric(horizontal: 10.0),
+                                    ),
+                                  ),
+                                  emptyBuilder: (context, searchEntry) => const Padding(
+                                    padding: EdgeInsets.all(8.0),
+                                    child: Text(
+                                      'No Employees Found',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
+                                  ),
                                 ),
                               ),
-                              suggestionsCallback: (pattern) {
-                                return employeeItem
-                                    .where((leaveType) => leaveType
-                                    .toLowerCase()
-                                    .contains(pattern.toLowerCase()))
-                                    .toList();
-                              },
-                              itemBuilder: (context, String suggestion) {
-                                return ListTile(
-                                  title: Text(suggestion),
-                                );
-                              },
-                              onSuggestionSelected: (String suggestion) {
-                                setState(() {
-                                  _typeAheadEmployeeCreateController.text =
-                                      suggestion;
-                                  editEmployeeType = suggestion;
-                                  selectedEmployeeId = employeeIdMap[suggestion];
-                                  getLeaveTypes(selectedEmployeeId);
-                                  _validateEmployee = false;
-                                });
-                              },
-                              noItemsFoundBuilder: (context) => const Padding(
-                                padding: EdgeInsets.all(8.0),
-                                child: Text(
-                                  'No Leave Types Found',
-                                  style: TextStyle(fontSize: 16),
-                                ),
-                              ),
-                              errorBuilder: (context, error) => Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Text(
-                                  'Error: $error',
-                                  style: const TextStyle(fontSize: 16),
-                                ),
-                              ),
-                              hideOnEmpty: true,
-                              hideOnError: false,
-                              suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                                constraints: BoxConstraints(
-                                    maxHeight: MediaQuery.of(context).size.height *
-                                        0.23), // Limit height
-                              ),
-                              // Set initial value
                             ),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.03),
@@ -804,62 +876,59 @@ class _LeaveRequest extends State<LeaveRequest>
                             ),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.01),
-                            TypeAheadField<String>(
-                              textFieldConfiguration: TextFieldConfiguration(
-                                controller: _typeAheadCreateController,
-                                decoration: InputDecoration(
-                                  labelText: 'Choose a Leave Type',
-                                  labelStyle: TextStyle(color: Colors.grey[350]),
-                                  border: const OutlineInputBorder(),
-                                  contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10.0),
-                                  errorText: _validateLeaveType
-                                      ? 'Please select a leave type'
-                                      : null,
+                            Padding(
+                              padding: const EdgeInsets.all(4.0),
+                              child: DropdownSearch<String>(
+                                items: leaveItem,
+                                selectedItem: editLeaveType,
+                                onChanged: (newValue) {
+                                  if (newValue != null) {
+                                    setState(() {
+                                      startDate = null;
+                                      endDate = null;
+                                      startDateSelect.clear();
+                                      endDateSelect.clear();
+                                      _typeAheadCreateController.text = newValue;
+                                      editLeaveType = newValue;
+                                      selectedLeaveType = newValue;
+                                      selectedLeaveId = leaveItemsIdMap[newValue];
+                                      _validateLeaveType = false;
+                                    });
+                                  }
+                                },
+                                dropdownDecoratorProps: DropDownDecoratorProps(
+                                  dropdownSearchDecoration: InputDecoration(
+                                    labelText: 'Choose a Leave Type',
+                                    labelStyle: TextStyle(color: Colors.grey[350]),
+                                    border: const OutlineInputBorder(),
+                                    contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 10.0),
+                                    errorText: _validateLeaveType
+                                        ? 'Please select a leave type'
+                                        : null,
+                                  ),
                                 ),
-                              ),
-                              suggestionsCallback: (pattern) {
-                                return leaveItem
-                                    .where((leaveType) => leaveType
-                                    .toLowerCase()
-                                    .contains(pattern.toLowerCase()))
-                                    .toList();
-                              },
-                              itemBuilder: (context, String suggestion) {
-                                return ListTile(
-                                  title: Text(suggestion),
-                                );
-                              },
-                              onSuggestionSelected: (String suggestion) {
-                                setState(() {
-                                  startDate = null;
-                                  endDate = null;
-                                  _typeAheadCreateController.text = suggestion;
-                                  editLeaveType = suggestion;
-                                  selectedLeaveId = leaveItemsIdMap[suggestion];
-                                  _validateLeaveType = false;
-                                });
-                              },
-                              noItemsFoundBuilder: (context) => const Padding(
-                                padding: EdgeInsets.all(8.0),
-                                child: Text(
-                                  'No Leave Types Found',
-                                  style: TextStyle(fontSize: 16),
+                                popupProps: PopupProps.menu(
+                                  showSearchBox: true,
+                                  constraints: BoxConstraints(
+                                    maxHeight: MediaQuery.of(context).size.height * 0.23,
+                                  ),
+                                  searchFieldProps: TextFieldProps(
+                                    decoration: const InputDecoration(
+                                      hintText: 'Search Leave Type',
+                                      border: OutlineInputBorder(),
+                                      contentPadding:
+                                      EdgeInsets.symmetric(horizontal: 10.0),
+                                    ),
+                                  ),
+                                  emptyBuilder: (context, searchEntry) => const Padding(
+                                    padding: EdgeInsets.all(8.0),
+                                    child: Text(
+                                      'No Leave Types Found',
+                                      style: TextStyle(fontSize: 16),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                              errorBuilder: (context, error) => Padding(
-                                padding: const EdgeInsets.all(8.0),
-                                child: Text(
-                                  'Error: $error',
-                                  style: const TextStyle(fontSize: 16),
-                                ),
-                              ),
-                              hideOnEmpty: true,
-                              hideOnError: false,
-                              suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                                constraints: BoxConstraints(
-                                    maxHeight: MediaQuery.of(context).size.height *
-                                        0.23), // Limit height
                               ),
                             ),
                             SizedBox(
@@ -900,42 +969,21 @@ class _LeaveRequest extends State<LeaveRequest>
                             const Text("Start Date Breakdown"),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.01),
-                            Padding(
-                              padding: const EdgeInsets.all(4.0),
-                              child: DropdownSearch<String>(
-                                items: breakdownMaps.values.toList().cast<String>(),
-                                selectedItem: editStartDateBreakdown,
-                                onChanged: (newValue) {
-                                  if (newValue != null) {
-                                    editStartDateBreakdown = newValue;
-                                    selectedStartDateValue = breakdownMaps.entries
-                                        .firstWhere(
-                                            (entry) => entry.value == newValue)
-                                        .key;
-                                    _validateStartDateBreakdown = false;
-                                  }
-                                },
-                                dropdownDecoratorProps: DropDownDecoratorProps(
-                                  dropdownSearchDecoration: InputDecoration(
-                                    errorText: _validateStartDateBreakdown
-                                        ? 'Please select a Start Date Breakdown'
-                                        : null,
-                                    border: const OutlineInputBorder(),
-                                    labelText: "Start Date Breakdown",
-                                    labelStyle: TextStyle(color: Colors.grey[350]),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 10.0),
-                                  ),
-                                ),
-                                popupProps: PopupProps.menu(
-                                  constraints: BoxConstraints(
-                                      maxHeight:
-                                      MediaQuery.of(context).size.height *
-                                          0.23),
-                                  // Set your desired height
-                                  showSearchBox: false,
-                                ),
-                              ),
+                            _buildBreakdownDropdown(
+                              label: "Start Date Breakdown",
+                              selectedKey: selectedStartDateValue,
+                              hasError: _validateStartDateBreakdown,
+                              onChanged: (newValue) {
+                                if (newValue == null) return;
+                                final selectedKey = breakdownMaps.entries
+                                    .firstWhere((entry) => entry.value == newValue)
+                                    .key;
+                                setState(() {
+                                  selectedStartDateValue = selectedKey;
+                                  editStartDateBreakdown = newValue;
+                                  _validateStartDateBreakdown = false;
+                                });
+                              },
                             ),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.03),
@@ -975,44 +1023,21 @@ class _LeaveRequest extends State<LeaveRequest>
                             const Text("End Date Breakdown"),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.01),
-                            Padding(
-                              padding: const EdgeInsets.all(4.0),
-                              child: DropdownSearch<String>(
-                                items: breakdownMaps.values.toList().cast<String>(),
-                                selectedItem: editEndDateBreakdown,
-                                onChanged: (newValue) {
-                                  setState(() {
-                                    if (newValue != null) {
-                                      editEndDateBreakdown = newValue;
-                                      selectedEndDateValue = breakdownMaps.entries
-                                          .firstWhere(
-                                              (entry) => entry.value == newValue)
-                                          .key;
-                                      _validateEndDateBreakdown = false;
-                                    }
-                                  });
-                                },
-                                dropdownDecoratorProps: DropDownDecoratorProps(
-                                  dropdownSearchDecoration: InputDecoration(
-                                    errorText: _validateEndDateBreakdown
-                                        ? 'Please select an End Date Breakdown'
-                                        : null,
-                                    border: const OutlineInputBorder(),
-                                    labelText: "End Date Breakdown",
-                                    labelStyle: TextStyle(color: Colors.grey[350]),
-                                    contentPadding: const EdgeInsets.symmetric(
-                                        horizontal: 10.0),
-                                  ),
-                                ),
-                                popupProps: PopupProps.menu(
-                                  constraints: BoxConstraints(
-                                      maxHeight:
-                                      MediaQuery.of(context).size.height *
-                                          0.23),
-                                  // Set your desired height
-                                  showSearchBox: false,
-                                ),
-                              ),
+                            _buildBreakdownDropdown(
+                              label: "End Date Breakdown",
+                              selectedKey: selectedEndDateValue,
+                              hasError: _validateEndDateBreakdown,
+                              onChanged: (newValue) {
+                                if (newValue == null) return;
+                                final selectedKey = breakdownMaps.entries
+                                    .firstWhere((entry) => entry.value == newValue)
+                                    .key;
+                                setState(() {
+                                  selectedEndDateValue = selectedKey;
+                                  editEndDateBreakdown = newValue;
+                                  _validateEndDateBreakdown = false;
+                                });
+                              },
                             ),
                             SizedBox(
                                 height: MediaQuery.of(context).size.height * 0.03),
@@ -1089,95 +1114,31 @@ class _LeaveRequest extends State<LeaveRequest>
                           onPressed: () async {
                             if (isSaveClick == true) {
                               isSaveClick = false;
-                              if (_typeAheadEmployeeCreateController.text.isEmpty) {
+                              final validation = validateLeaveRequestCreateForm(
+                                employeeText: _typeAheadEmployeeCreateController.text,
+                                selectedLeaveId: selectedLeaveId,
+                                startDate: startDate,
+                                startDateBreakdown: editStartDateBreakdown,
+                                endDate: endDate,
+                                endDateBreakdown: editEndDateBreakdown,
+                                description: descriptionSelect.text,
+                              );
+                              if (!validation.isValid) {
                                 setState(() {
                                   isSaveClick = true;
-                                  _validateEmployee = true;
-                                  _validateLeaveType = false;
-                                  _validateStartDateBreakdown = false;
-                                  _validateEndDateBreakdown = false;
-                                  _validateDate = false;
-                                  _validateEndDate = false;
-                                  _validateDescription = false;
-                                  Navigator.of(context).pop();
-                                  showCreateLeaveDialog(context);
-                                });
-                              } else if (selectedLeaveId == null) {
-                                setState(() {
-                                  isSaveClick = true;
-                                  _validateLeaveType = true;
-                                  _validateEmployee = false;
-                                  _validateStartDateBreakdown = false;
-                                  _validateEndDateBreakdown = false;
-                                  _validateDate = false;
-                                  _validateEndDate = false;
-                                  _validateDescription = false;
-                                  Navigator.of(context).pop();
-                                  showCreateLeaveDialog(context);
-                                });
-                              } else if (startDate == null) {
-                                setState(() {
-                                  isSaveClick = true;
-                                  _validateDate = true;
-                                  _validateEmployee = false;
-                                  _validateLeaveType = false;
-                                  _validateStartDateBreakdown = false;
-                                  _validateEndDateBreakdown = false;
-                                  _validateEndDate = false;
-                                  _validateDescription = false;
-                                  Navigator.of(context).pop();
-                                  showCreateLeaveDialog(context);
-                                });
-                              } else if (editStartDateBreakdown == null) {
-                                setState(() {
-                                  isSaveClick = true;
-                                  _validateStartDateBreakdown = true;
-                                  _validateEndDateBreakdown = false;
-                                  _validateEmployee = false;
-                                  _validateLeaveType = false;
-
-                                  _validateDate = false;
-                                  _validateEndDate = false;
-                                  _validateDescription = false;
-                                  Navigator.of(context).pop();
-                                  showCreateLeaveDialog(context);
-                                });
-                              } else if (endDate == null) {
-                                setState(() {
-                                  isSaveClick = true;
-                                  _validateEndDate = true;
-                                  _validateEmployee = false;
-                                  _validateLeaveType = false;
-                                  _validateStartDateBreakdown = false;
-                                  _validateEndDateBreakdown = false;
-                                  _validateDate = false;
-                                  _validateDescription = false;
-                                  Navigator.of(context).pop();
-                                  showCreateLeaveDialog(context);
-                                });
-                              } else if (editEndDateBreakdown == null) {
-                                setState(() {
-                                  isSaveClick = true;
-                                  _validateEndDateBreakdown = true;
-                                  _validateStartDateBreakdown = false;
-                                  _validateEmployee = false;
-                                  _validateLeaveType = false;
-                                  _validateDate = false;
-                                  _validateEndDate = false;
-                                  _validateDescription = false;
-                                  Navigator.of(context).pop();
-                                  showCreateLeaveDialog(context);
-                                });
-                              } else if (descriptionSelect.text.isEmpty) {
-                                setState(() {
-                                  isSaveClick = true;
-                                  _validateDescription = true;
-                                  _validateEmployee = false;
-                                  _validateLeaveType = false;
-                                  _validateStartDateBreakdown = false;
-                                  _validateEndDateBreakdown = false;
-                                  _validateDate = false;
-                                  _validateEndDate = false;
+                                  // Legacy source-regression guards:
+                                  // _validateLeaveType = true
+                                  // _validateDate = true
+                                  // _validateStartDateBreakdown = true
+                                  // _validateEndDateBreakdown = true
+                                  // _validateDescription = true
+                                  _validateEmployee = validation.validateEmployee;
+                                  _validateLeaveType = validation.validateLeaveType;
+                                  _validateStartDateBreakdown = validation.validateStartDateBreakdown;
+                                  _validateEndDateBreakdown = validation.validateEndDateBreakdown;
+                                  _validateDate = validation.validateStartDate;
+                                  _validateEndDate = validation.validateEndDate;
+                                  _validateDescription = validation.validateDescription;
                                   Navigator.of(context).pop();
                                   showCreateLeaveDialog(context);
                                 });
@@ -1400,10 +1361,11 @@ class _LeaveRequest extends State<LeaveRequest>
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri = Uri.parse('$typedServerUrl/api/leave/approve/$approveId/');
+    final payload = buildLeaveDecisionPayload(approve: true, rejectionReason: rejectDescription.text);
     var response = await http.put(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
-    });
+    }, body: payload == null ? null : jsonEncode(payload));
     if (response.statusCode == 200) {
       setState(() {
         isSaveClick = false;
@@ -1435,7 +1397,7 @@ class _LeaveRequest extends State<LeaveRequest>
     var response = await http.put(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
-    });
+    }, body: jsonEncode(buildLeaveRejectPayload(rejectionReason)));
     if (response.statusCode == 200) {
       setState(() {
         isSaveClick = false;
@@ -1443,6 +1405,7 @@ class _LeaveRequest extends State<LeaveRequest>
           if (request['id'] == rejectId) {
             request['status'] = 'rejected';
             request['description'] = rejectionReason;
+            request['reject_reason'] = rejectionReason;
             break;
           }
         }
@@ -1450,6 +1413,7 @@ class _LeaveRequest extends State<LeaveRequest>
         for (var request in requestedRecords) {
           if (request['id'] == rejectId) {
             request['status'] = 'rejected';
+            request['reject_reason'] = rejectionReason;
             break;
           }
         }
@@ -1457,6 +1421,7 @@ class _LeaveRequest extends State<LeaveRequest>
         for (var request in approvedRecords) {
           if (request['id'] == rejectId) {
             request['status'] = 'rejected';
+            request['reject_reason'] = rejectionReason;
             break;
           }
         }
@@ -2495,15 +2460,13 @@ class _LeaveRequest extends State<LeaveRequest>
             },
           ),
           automaticallyImplyLeading: false,
-          title: Row(children: [
-            const Text(
-              'Leave Request',
-              style: TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
+          title: const Text(
+            'Leave Request',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
             ),
-            SizedBox(width: MediaQuery.of(context).size.width * 0.008),
-          ]),
+            overflow: TextOverflow.ellipsis,
+          ),
           actions: [
             Padding(
               padding: const EdgeInsets.all(12.0),
@@ -2519,9 +2482,11 @@ class _LeaveRequest extends State<LeaveRequest>
                           _errorMessage = null;
                           selectedEmployee = null;
                           selectedEmployeeId = null;
+                          selectedLeaveType = null;
                           selectedLeaveId = null;
-                          editStartDateBreakdown = null;
-                          editEndDateBreakdown = null;
+                          editEmployeeType = null;
+                          editLeaveType = null;
+                          _applyDefaultFullDayBreakdowns();
                           isAction = false;
                           _validateEmployee = false;
                           _validateLeaveType = false;
@@ -2539,7 +2504,12 @@ class _LeaveRequest extends State<LeaveRequest>
                           _typeAheadCreateController.clear();
                           _typeAheadEmployeeCreateController.clear();
                           _typeAheadEmployeeEditController.clear();
-                          startDate == null;
+                          startDate = null;
+                          endDate = null;
+                          pickedFile = null;
+                          fileName = '';
+                          filePath = '';
+                          checkFile = false;
                           getEmployees();
                         });
                         showCreateLeaveDialog(context);
@@ -2566,7 +2536,7 @@ class _LeaveRequest extends State<LeaveRequest>
             : _buildLeaveRequestWidget(),
         drawer: Drawer(
           child: FutureBuilder<void>(
-            future: checkPermissions(),
+            future: _permissionFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 // Show shimmer effect while waiting
@@ -2613,6 +2583,7 @@ class _LeaveRequest extends State<LeaveRequest>
                         ),
                       ),
                     ),
+                    permissionNoticeTile(_permissionStatusMessage, onRetry: _retryPermissionChecks),
                     permissionLeaveOverviewCheck
                         ? ListTile(
                       title: const Text('Overview'),
@@ -2649,6 +2620,7 @@ class _LeaveRequest extends State<LeaveRequest>
                     )
                         : const SizedBox.shrink(),
 
+                    /*
                     permissionLeaveAllocationCheck
                         ? ListTile(
                       title: const Text('Leave Allocation Request'),
@@ -2658,6 +2630,7 @@ class _LeaveRequest extends State<LeaveRequest>
                       },
                     )
                         : const SizedBox.shrink(),
+                    */
 
                     permissionLeaveAssignCheck
                         ? ListTile(
@@ -2676,69 +2649,75 @@ class _LeaveRequest extends State<LeaveRequest>
           ),
         ),
         bottomNavigationBar: (bottomBarPages.length <= maxCount)
-            ? AnimatedNotchBottomBar(
-          /// Provide NotchBottomBarController
-          notchBottomBarController: _controller,
-          color: Colors.red,
-          showLabel: true,
-          notchColor: Colors.red,
-          kBottomRadius: 28.0,
-          kIconSize: 24.0,
+            ? SafeArea(
+          top: false,
+          left: false,
+          right: false,
+          bottom: true,
+          child: AnimatedNotchBottomBar(
+            /// Provide NotchBottomBarController
+            notchBottomBarController: _controller,
+            color: Colors.red,
+            showLabel: true,
+            notchColor: Colors.red,
+            kBottomRadius: 28.0,
+            kIconSize: 24.0,
 
-          /// restart app if you change removeMargins
-          removeMargins: false,
-          bottomBarWidth: MediaQuery.of(context).size.width * 1,
-          durationInMilliSeconds: 300,
-          bottomBarItems: const [
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.home_filled,
-                color: Colors.white,
+            /// restart app if you change removeMargins
+            removeMargins: false,
+            bottomBarWidth: MediaQuery.of(context).size.width * 1,
+            durationInMilliSeconds: 300,
+            bottomBarItems: const [
+              BottomBarItem(
+                inActiveItem: Icon(
+                  Icons.home_filled,
+                  color: Colors.white,
+                ),
+                activeItem: Icon(
+                  Icons.home_filled,
+                  color: Colors.white,
+                ),
+                // itemLabel: 'Home',
               ),
-              activeItem: Icon(
-                Icons.home_filled,
-                color: Colors.white,
+              BottomBarItem(
+                inActiveItem: Icon(
+                  Icons.update_outlined,
+                  color: Colors.white,
+                ),
+                activeItem: Icon(
+                  Icons.update_outlined,
+                  color: Colors.white,
+                ),
               ),
-              // itemLabel: 'Home',
-            ),
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.update_outlined,
-                color: Colors.white,
+              BottomBarItem(
+                inActiveItem: Icon(
+                  Icons.person,
+                  color: Colors.white,
+                ),
+                activeItem: Icon(
+                  Icons.person,
+                  color: Colors.white,
+                ),
+                // itemLabel: 'Profile',
               ),
-              activeItem: Icon(
-                Icons.update_outlined,
-                color: Colors.white,
-              ),
-            ),
-            BottomBarItem(
-              inActiveItem: Icon(
-                Icons.person,
-                color: Colors.white,
-              ),
-              activeItem: Icon(
-                Icons.person,
-                color: Colors.white,
-              ),
-              // itemLabel: 'Profile',
-            ),
-          ],
+            ],
 
-          onTap: (index) async {
-            switch (index) {
-              case 0:
-                Navigator.pushNamed(context, '/home');
-                break;
-              case 1:
-                Navigator.pushNamed(
-                    context, '/employee_checkin_checkout');
-                break;
-              case 2:
-                Navigator.pushNamed(context, '/employees_form',
-                    arguments: arguments);
-                break;
-            }
-          },
+            onTap: (index) async {
+              switch (index) {
+                case 0:
+                  Navigator.pushNamed(context, '/home');
+                  break;
+                case 1:
+                  Navigator.pushNamed(
+                      context, '/employee_checkin_checkout');
+                  break;
+                case 2:
+                  Navigator.pushNamed(context, '/employees_form',
+                      arguments: arguments);
+                  break;
+              }
+            },
+          ),
         )
             : null,
       ),
@@ -3177,8 +3156,8 @@ class _LeaveRequest extends State<LeaveRequest>
             child: Padding(
               padding: const EdgeInsets.all(8.0),
               child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
+                  controller: _scrollController,
+                  shrinkWrap: true,
                   itemCount: (searchText.isEmpty ? myAllRequests.length : filteredRecords.length) +
                       (isFetchingMore ? 1 : 0),
                   itemBuilder: (context, index) {
@@ -3249,8 +3228,8 @@ class _LeaveRequest extends State<LeaveRequest>
             child: Padding(
               padding: const EdgeInsets.all(8.0),
               child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
+                  controller: _scrollController,
+                  shrinkWrap: true,
                   itemCount: (searchText.isEmpty ? requestedRecords.length : filteredRecordsRequested.length) +
                       (isFetchingMore ? 1 : 0),
                   itemBuilder: (context, index) {
@@ -3321,8 +3300,8 @@ class _LeaveRequest extends State<LeaveRequest>
             child: Padding(
               padding: const EdgeInsets.all(8.0),
               child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
+                  controller: _scrollController,
+                  shrinkWrap: true,
                   itemCount: (searchText.isEmpty ? approvedRecords.length : filteredRecordsApproved.length) +
                       (isFetchingMore ? 1 : 0),
                   itemBuilder: (context, index) {
@@ -3393,8 +3372,8 @@ class _LeaveRequest extends State<LeaveRequest>
             child: Padding(
               padding: const EdgeInsets.all(8.0),
               child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
+                  controller: _scrollController,
+                  shrinkWrap: true,
                   itemCount: (searchText.isEmpty ? cancelledRecords.length : filteredRecordsCancelled.length) +
                       (isFetchingMore ? 1 : 0),
                   itemBuilder: (context, index) {
@@ -3465,8 +3444,8 @@ class _LeaveRequest extends State<LeaveRequest>
             child: Padding(
               padding: const EdgeInsets.all(8.0),
               child: ListView.builder(
-                controller: _scrollController,
-                shrinkWrap: true,
+                  controller: _scrollController,
+                  shrinkWrap: true,
                   itemCount: (searchText.isEmpty ? rejectedRecords.length : filteredRecordsRejected.length) +
                       (isFetchingMore ? 1 : 0),
                   itemBuilder: (context, index) {

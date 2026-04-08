@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shimmer/shimmer.dart';
@@ -96,11 +97,14 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
   int _allRequestsPage = 1;
   int _myRequestsPage = 1;
   late String getToken = '';
+  String? _permissionStatusMessage;
+  late Future<void> _permissionFuture;
 
 
   @override
   void initState() {
     super.initState();
+    _permissionFuture = checkPermissions();
     _scrollController.addListener(_scrollListener);
     description.text = "";
 
@@ -124,6 +128,41 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
 
   }
 
+  Future<void> _simulateLoading() async {
+    await Future.delayed(const Duration(milliseconds: 300));
+    if (!mounted) return;
+    setState(() {
+      _isShimmerVisible = false;
+      _isShimmer = false;
+      isLoading = false;
+    });
+  }
+
+  void _scrollListener() {
+    if (!_scrollController.hasClients) return;
+    if (_scrollController.position.pixels <
+        _scrollController.position.maxScrollExtent - 100) {
+      return;
+    }
+    if (_isLoadingMore) return;
+    if (_tabController.index == 0) {
+      if (!_hasMoreAllRequests) return;
+      _allRequestsPage += 1;
+      getAllocationRequest();
+      return;
+    }
+    if (!_hasMoreMyRequests) return;
+    _myRequestsPage += 1;
+    getMyAllocationRequest();
+  }
+
+  void setFileName() {
+    if (!mounted) return;
+    setState(() {
+      _fileNameController.text = fileName;
+    });
+  }
+
   Future<void> fetchToken() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
@@ -145,123 +184,78 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     ]);
   }
 
+  void _rememberPermissionMessage(String? message) {
+    if (message == null || message.trim().isEmpty) {
+      return;
+    }
+    _permissionStatusMessage ??= message;
+  }
+
+  Future<void> _retryPermissionChecks() async {
+    setState(() {
+      _permissionFuture = checkPermissions();
+    });
+    await _permissionFuture;
+  }
+
   Future<void> checkPermissions() async {
-    await permissionLeaveOverviewChecks();
-    await permissionLeaveTypeChecks();
-    await permissionLeaveRequestChecks();
-    await permissionLeaveAssignChecks();
-    _isShimmerVisible = false;
-  }
-
-  @override
-  void dispose() {
-    _scrollController.removeListener(_scrollListener);
-    _scrollController.dispose();
-    _fileNameController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _simulateLoading() async {
-    await Future.delayed(const Duration(seconds: 5));
-    setState(() {
-      _isShimmer = false;
-    });
-  }
-
-  Future<void> permissionLeaveOverviewChecks() async {
     final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-perm/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        permissionMyLeaveRequestCheck = true;
+        permissionLeaveOverviewCheck = false;
+        permissionLeaveTypeCheck = false;
+        permissionLeaveRequestCheck = false;
+        permissionLeaveAssignCheck = false;
+        permissionLeaveAllocationCheck = false;
+        _permissionStatusMessage = 'Server error. Try again later.';
+      });
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      permissionMyLeaveRequestCheck = true;
+      permissionLeaveOverviewCheck = false;
+      permissionLeaveTypeCheck = false;
+      permissionLeaveRequestCheck = false;
+      permissionLeaveAssignCheck = false;
+      permissionLeaveAllocationCheck = false;
+      _permissionStatusMessage = null;
     });
-    if (response.statusCode == 200) {
+
+    Future<void> runCheck(String path, VoidCallback onAllowed) async {
+      final result = await guardedPermissionGet(
+        Uri.parse('$typedServerUrl$path'),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        if (result.isAllowed) {
+          onAllowed();
+        } else if (!result.isForbidden) {
+          _rememberPermissionMessage(result.message);
+        }
+      });
+    }
+
+    await runCheck('/api/leave/check-perm/', () {
       permissionLeaveOverviewCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveTypeChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-type/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-type/', () {
       permissionLeaveTypeCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveRequestChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-request/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-request/', () {
       permissionLeaveRequestCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  Future<void> permissionLeaveAssignChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-assign/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
     });
-    if (response.statusCode == 200) {
+    await runCheck('/api/leave/check-assign/', () {
       permissionLeaveAssignCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
-  }
-
-  void _scrollListener() {
-    if (_scrollController.offset >=
-        _scrollController.position.maxScrollExtent - 200 && // Load more before reaching exact bottom
-        !_scrollController.position.outOfRange &&
-        !_isLoadingMore) {
-      if (allocationCheck && _tabController.index == 0 && _hasMoreAllRequests) {
-        _allRequestsPage++;
-        getAllocationRequest();
-      } else if ((!allocationCheck || _tabController.index == 1) && _hasMoreMyRequests) {
-        _myRequestsPage++;
-        getMyAllocationRequest();
-      }
-    }
-  }
-
-  void setFileName() {
-    setState(() {
-      _fileNameController.text = fileName;
     });
   }
 
@@ -1480,6 +1474,26 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     );
   }
 
+  @override
+  void dispose() {
+    _scrollController.removeListener(_scrollListener);
+    _scrollController.dispose();
+    _typeAheadEditController.dispose();
+    _typeAheadAddController.dispose();
+    _typeEditEmployeeController.dispose();
+    _typeAddEmployeeController.dispose();
+    _fileNameController.dispose();
+    _controllerValue.dispose();
+    description.dispose();
+    rejectDescription.dispose();
+    descriptionController.dispose();
+    allocationDescription.dispose();
+    leaveDescription.dispose();
+    myLeaveDescription.dispose();
+    _tabController.dispose();
+    super.dispose();
+  }
+
   Future<XFile?> uploadFile(BuildContext context) async {
     final picker = ImagePicker();
     final XFile? pickedFile =
@@ -2376,7 +2390,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
             : _buildAllocationRequestWidget(),
         drawer: Drawer(
           child: FutureBuilder<void>(
-            future: checkPermissions(),
+            future: _permissionFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
                 // Show shimmer effect while waiting
@@ -2423,6 +2437,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                         ),
                       ),
                     ),
+                    permissionNoticeTile(_permissionStatusMessage, onRetry: _retryPermissionChecks),
                     permissionLeaveOverviewCheck
                         ? ListTile(
                       title: const Text('Overview'),
@@ -2486,7 +2501,12 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
           ),
         ),
         bottomNavigationBar: (bottomBarPages.length <= maxCount)
-            ? AnimatedNotchBottomBar(
+            ? SafeArea(
+              top: false,
+              left: false,
+              right: false,
+              bottom: true,
+              child: AnimatedNotchBottomBar(
           /// Provide NotchBottomBarController
           notchBottomBarController: _controller,
           color: Colors.red,
@@ -2548,7 +2568,8 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                 break;
             }
           },
-        )
+        ),
+            )
             : null,
       ),
     );

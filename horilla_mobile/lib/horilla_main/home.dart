@@ -1,16 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter_map_animations/flutter_map_animations.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:internet_connection_checker/internet_connection_checker.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shimmer/shimmer.dart';
-import 'package:timeago/timeago.dart' as timeago;
-import '../../checkin_checkout/checkin_checkout_views/geofencing.dart';
+import '../res/utilities/permission_guard.dart';
+import 'notification_router.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -20,6 +19,58 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
+
+  Future<void> _openLeaveModule() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (!mounted) return;
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      Navigator.pushNamed(context, '/my_leave_request');
+      return;
+    }
+
+    final result = await guardedPermissionGet(
+      Uri.parse('$typedServerUrl/api/leave/check-perm/'),
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $token",
+      },
+    );
+    if (!mounted) return;
+    if (result.isAllowed) {
+      Navigator.pushNamed(context, '/leave_overview');
+      return;
+    }
+    if (result.isUnauthorized) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(result.message ?? 'Session expired, please log in again.')),
+      );
+      return;
+    }
+    Navigator.pushNamed(context, '/my_leave_request');
+  }
+
+  Future<http.Response?> _safeGet(Uri uri, String? token) async {
+    if (token == null) return null;
+    try {
+      return await http
+          .get(uri, headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $token",
+      })
+          .timeout(const Duration(seconds: 5));
+    } on TimeoutException catch (e) {
+      debugPrint('GET timeout: $uri -> $e');
+      return null;
+    } on SocketException catch (e) {
+      debugPrint('GET socket error: $uri -> $e');
+      return null;
+    } catch (e) {
+      debugPrint('GET error: $uri -> $e');
+      return null;
+    }
+  }
   late StreamSubscription subscription;
   var isDeviceConnected = false;
   final ScrollController _scrollController = ScrollController();
@@ -30,15 +81,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   bool isLoading = true;
   bool isFirstFetch = true;
   bool isAlertSet = false;
-  bool permissionLeaveOverviewCheck = false;
-  bool permissionLeaveTypeCheck = false;
-  bool permissionGeoFencingMapViewCheck = false;
-  bool geoFencingEnabled = false;
   bool permissionWardCheck = false;
-  bool permissionLeaveAssignCheck = false;
-  bool permissionLeaveRequestCheck = false;
-  bool permissionMyLeaveRequestCheck = false;
-  bool permissionLeaveAllocationCheck = false;
   int initialTabIndex = 0;
   int notificationsCount = 0;
   int maxCount = 5;
@@ -47,9 +90,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Timer? _notificationTimer;
   Set<int> seenNotificationIds = {};
   int currentPage = 0;
-  List<dynamic> responseDataLocation = [];
-  final List<LocationWithRadius> locations = [];
-  LocationWithRadius? selectedLocation;
   late final AnimatedMapController _mapController;
   bool _isPermissionLoading = true;
   bool isAuthenticated = true;
@@ -58,6 +98,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    clearPermissionGuardCache();
     _mapController = AnimatedMapController(vsync: this);
     _scrollController.addListener(_scrollListener);
     _initializePermissionsAndData();
@@ -67,12 +108,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   Future _initializePermissionsAndData() async {
     await checkAllPermissions();
     await Future.wait([
-      permissionGeoFencingMapView(),
-      loadGeoFencingPreference(),
-      permissionLeaveOverviewChecks(),
-      permissionLeaveTypeChecks(),
-      permissionLeaveRequestChecks(),
-      permissionLeaveAssignChecks(),
       permissionWardChecks(),
       fetchNotifications(),
       unreadNotificationsCount(),
@@ -86,111 +121,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
   }
 
 
-  Future<void> loadGeoFencingPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    bool? geoFencing = prefs.getBool("geo_fencing");
-    setState(() {
-      geoFencingEnabled = geoFencing ?? false;
-    });
-  }
-
-  Future<void> permissionLeaveOverviewChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-perm/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    setState(() {
-      if (response.statusCode == 200) {
-        permissionLeaveOverviewCheck = true;
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      } else {
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      }
-    });
-  }
-
-  Future<void> permissionLeaveTypeChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-type/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    setState(() {
-      if (response.statusCode == 200) {
-        permissionLeaveTypeCheck = true;
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      } else {
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      }
-    });
-  }
-
-  Future<void> permissionGeoFencingMapView() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/geofencing/setup-check/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    setState(() {
-      permissionGeoFencingMapViewCheck = response.statusCode == 200;
-    });
-  }
-
-  Future<void> permissionLeaveRequestChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-request/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    setState(() {
-      if (response.statusCode == 200) {
-        permissionLeaveRequestCheck = true;
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      } else {
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      }
-    });
-  }
-
-  Future<void> permissionLeaveAssignChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-assign/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    setState(() {
-      if (response.statusCode == 200) {
-        permissionLeaveAssignCheck = true;
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      } else {
-        permissionMyLeaveRequestCheck = true;
-        permissionLeaveAllocationCheck = true;
-      }
-    });
-  }
 
   void getConnectivity() {
     subscription = InternetConnectionChecker().onStatusChange.listen((status) {
@@ -247,10 +177,10 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
     var uri = Uri.parse('$typedServerUrl/api/ward/check-ward/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
+    final response = await _safeGet(uri, token);
+
+    if (response == null) return;
+    if (!mounted) return;
     setState(() {
       permissionWardCheck = response.statusCode == 200;
     });
@@ -262,13 +192,13 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     var typedServerUrl = prefs.getString("typed_url");
     var employeeId = prefs.getInt("employee_id");
     var uri = Uri.parse('$typedServerUrl/api/employee/employees/$employeeId');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
+    final response = await _safeGet(uri, token);
+
+    if (response == null) return;
 
     if (response.statusCode == 200) {
       final responseData = jsonDecode(response.body);
+      if (!mounted) return;
       setState(() {
         arguments = {
           'employee_id': responseData['id'] ?? '',
@@ -313,10 +243,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       var uri = Uri.parse(
           '$typedServerUrl/api/notifications/notifications/list/unread?page=$page');
 
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
+      final response = await _safeGet(uri, token);
+
+      if (response == null) return;
 
       if (response.statusCode == 200) {
         var responseData = jsonDecode(response.body);
@@ -348,7 +277,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     Set<String> uniqueMapStrings = allNotifications
         .map((notification) => jsonEncode(notification))
         .toSet();
-
+    if (!mounted) return;
     setState(() {
       notifications = uniqueMapStrings
           .map((jsonString) => jsonDecode(jsonString))
@@ -365,12 +294,12 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     var typedServerUrl = prefs.getString("typed_url");
     var uri = Uri.parse(
         '$typedServerUrl/api/notifications/notifications/list/unread');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
+    final response = await _safeGet(uri, token);
+
+    if (response == null) return;
 
     if (response.statusCode == 200) {
+      if (!mounted) return;
       setState(() {
         notificationsCount = jsonDecode(response.body)['count'];
         isLoading = false;
@@ -395,6 +324,16 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         fetchNotifications();
       });
     }
+  }
+
+
+  Future<void> _openNotificationForRecord(Map<String, dynamic> record) async {
+    final notificationId = record['id'];
+    if (notificationId is int && record['unread'] == true) {
+      await markReadNotification(notificationId);
+    }
+    if (!mounted) return;
+    await openNotificationFromRecord(context, record);
   }
 
   Future<void> markAllReadNotification() async {
@@ -487,209 +426,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     Navigator.pushReplacementNamed(context, "/login");
   }
 
-  Future<void> enableFaceDetection() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        'start': true,
-      }),
-    );
-    print('Face Detection Enable Response: ${response.statusCode}');
-    print(response.body);
-  }
 
-  Future<void> disableFaceDetection() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        'start': false,
-      }),
-    );
-    print('Face Detection Disable Response: ${response.statusCode}');
-  }
-
-  Future<bool> getFaceDetection() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/facedetection/config/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
-      var data = jsonDecode(response.body);
-      bool isEnabled = data['start'] ?? false;
-      return isEnabled;
-    } else {
-      print('Failed to get face detection');
-      return false;
-    }
-  }
-
-
-  Future<bool?> getGeoFence() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/');
-
-    try {
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-
-      if (response.statusCode == 200 && response.body.isNotEmpty) {
-        var data = jsonDecode(response.body);
-        bool isEnabled = data['start'] ?? false;
-        return isEnabled;
-      }
-      else if (response.statusCode == 404) {
-        print('Geofencing not configured yet');
-        return null;
-      }
-      else {
-        print('Failed to get geofencing: ${response.statusCode}');
-        return false;
-      }
-    } catch (e) {
-      print('Error getting geofencing: $e');
-      return false;
-    }
-  }
-
-
-  Future<void> enableGeoFenceLocation() async {
-    await getGeoFenceLocation();
-    if (responseDataLocation.isEmpty) return;
-    var locationId = responseDataLocation[0]['id'];
-    final prefs = await SharedPreferences.getInstance();
-    var companyId = prefs.getInt("company_id");
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/$locationId/');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        'latitude': selectedLocation?.coordinates.latitude,
-        'longitude': selectedLocation?.coordinates.longitude,
-        'radius_in_meters': selectedLocation?.radius,
-        'start': true,
-        'company_id': companyId
-      }),
-    );
-    print('GeoFence Enable Response: ${response.statusCode}');
-  }
-
-  Future<void> disableGeoFenceLocation() async {
-    await getGeoFenceLocation();
-    if (responseDataLocation.isEmpty) return;
-
-    var locationId = responseDataLocation[0]['id'];
-    final prefs = await SharedPreferences.getInstance();
-    var companyId = prefs.getInt("company_id");
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/$locationId/');
-    var response = await http.put(
-      uri,
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      },
-      body: jsonEncode({
-        'latitude': selectedLocation?.coordinates.latitude,
-        'longitude': selectedLocation?.coordinates.longitude,
-        'radius_in_meters': selectedLocation?.radius,
-        'start': false,
-        'company_id': companyId
-      }),
-    );
-    print('GeoFence Disable Response: ${response.statusCode}');
-  }
-
-  Future<void> getGeoFenceLocation() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/geofencing/setup/');
-
-    try {
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        if (data is Map && data.isNotEmpty) {
-          final lat = data['latitude'];
-          final lng = data['longitude'];
-          final rad = data['radius_in_meters'];
-
-          if (lat != null && lng != null && rad != null) {
-            final locationName = await _getLocationName(lat, lng);
-            final location = LocationWithRadius(
-              LatLng(lat, lng),
-              locationName,
-              (rad).toDouble(),
-            );
-
-            setState(() {
-              responseDataLocation = [data];
-              locations.clear();
-              locations.add(location);
-              selectedLocation = location;
-              _mapController.animateTo(dest: location.coordinates, zoom: 12.0);
-            });
-            print('responseDataLocation: $responseDataLocation');
-          }
-        }
-      } else {
-        print('Failed to load geofence data: ${response.statusCode}');
-      }
-    } catch (e) {
-      print("Error fetching geofence data: $e");
-    }
-  }
-
-
-  Future<String> _getLocationName(double latitude, double longitude) async {
-    try {
-      List<Placemark> placemarks =
-      await placemarkFromCoordinates(latitude, longitude);
-      if (placemarks.isNotEmpty) {
-        Placemark place = placemarks[0];
-        String name = "${place.locality ?? ''}, ${place.country ?? ''}".trim();
-        return name.isEmpty ? "Unknown Location" : name;
-      }
-      return "Unknown Location";
-    } catch (e) {
-      print('Error getting location name: $e');
-      return "Unknown Location";
-    }
-  }
 
   Future<void> showSavedAnimation() async {
     String jsonContent = '''
@@ -915,6 +652,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       width: double.infinity,
                       child: ElevatedButton(
                         onPressed: () {
+                          Navigator.pop(context);
                           Navigator.pushNamed(context, '/notifications_list');
                         },
                         style: ElevatedButton.styleFrom(
@@ -950,14 +688,11 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
 
   Widget buildListItem(
       BuildContext context, Map<String, dynamic> record, int index) {
-    final timestamp = DateTime.parse(record['timestamp']);
-    final timeAgo = timeago.format(timestamp);
-    final user = arguments['employee_name'];
     return Padding(
       padding: const EdgeInsets.all(0),
       child: GestureDetector(
         onTap: () async {
-          setState(() {});
+          await _openNotificationForRecord(record);
         },
         child: Container(
           decoration: BoxDecoration(
@@ -1010,7 +745,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                         ),
                         const SizedBox(height: 4.0),
                         Text(
-                          '$timeAgo by User $user',
+                          extractNotificationMessage(record),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                               fontSize:
                               MediaQuery.of(context).size.width * 0.0268),
@@ -1058,190 +795,60 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
         ),
         automaticallyImplyLeading: false,
         actions: [
-          if (_isPermissionLoading)
-            Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: Shimmer.fromColors(
-                baseColor: Colors.grey[300]!,
-                highlightColor: Colors.grey[100]!,
-                child: Container(
-                  width: 24,
-                  height: 24,
-                  decoration: const BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            )
-          else ...[
-            Visibility(
-              visible: permissionGeoFencingMapViewCheck,
-              child: IconButton(
+          Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              IconButton(
                 icon: const Icon(
-                  Icons.settings,
+                  Icons.notifications,
                   color: Colors.black,
                 ),
-                onPressed: () async {
-                  await enableFaceDetection();
-                  var geoFencingResponse = await getGeoFence();
-                  final prefs = await SharedPreferences.getInstance();
-
-                  bool geoFencingSetupExists = geoFencingResponse != null;
-                  bool geoFencingEnabled = geoFencingSetupExists ? geoFencingResponse : false;
-
-                  await prefs.setBool("face_detection", true);
-                  await prefs.setBool("geo_fencing", geoFencingEnabled);
-
-                  showDialog(
-                    context: context,
-                    builder: (context) {
-                      bool tempGeofencing = geoFencingEnabled;
-                      bool isGeofencingSetup = geoFencingSetupExists;
-
-                      return StatefulBuilder(
-                        builder: (context, setState) {
-                          return AlertDialog(
-                            title: const Text('Settings'),
-                            content: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                SwitchListTile(
-                                  title: const Text('Geofencing'),
-                                  value: tempGeofencing,
-                                  onChanged: (val) async {
-                                    setState(() {
-                                      tempGeofencing = val;
-                                    });
-                                    print('wswsws');
-                                    print(isGeofencingSetup);
-
-                                    if (!isGeofencingSetup && val) {
-                                      Navigator.pop(context); // Close settings dialog
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) => const MapScreen(),
-                                        ),
-                                      );
-                                      return;
-                                    }
-
-                                    if (val) {
-                                      await enableGeoFenceLocation();
-                                    } else {
-                                      await disableGeoFenceLocation();
-                                    }
-                                  },
-                                ),
-                              ],
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Cancel'),
-                              ),
-                              TextButton(
-                                onPressed: () async {
-                                  final prefs = await SharedPreferences.getInstance();
-                                  await prefs.setBool("face_detection", true);
-                                  await prefs.setBool("geo_fencing", tempGeofencing);
-
-                                  setState(() {
-                                    geoFencingEnabled = tempGeofencing;
-                                  });
-
-                                  Navigator.pop(context);
-                                  await showSavedAnimation();
-                                },
-                                child: const Text('OK'),
-                              ),
-                            ],
-                          );
-                        },
-                      );
-                    },
-                  );
+                onPressed: () {
+                  Navigator.pushNamed(context, '/notifications_list');
                 },
               ),
-            ),
-            Visibility(
-              visible: permissionGeoFencingMapViewCheck && geoFencingEnabled,
-              child: IconButton(
-                icon: const Icon(
-                  Icons.location_on,
-                  color: Colors.black,
-                ),
-                onPressed: () async {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const MapScreen(),
+              if (notificationsCount > 0)
+                Positioned(
+                  right: 0,
+                  top: 0,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: MediaQuery.of(context).size.width * 0.012,
+                      vertical: MediaQuery.of(context).size.width * 0.004,
                     ),
-                  );
-                },
-              ),
-            ),
-            Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(
-                    Icons.notifications,
-                    color: Colors.black,
-                  ),
-                  onPressed: () {
-                    markAllReadNotification();
-                    Navigator.pushNamed(context, '/notifications_list');
-                    setState(() {
-                      fetchNotifications();
-                      unreadNotificationsCount();
-                    });
-                  },
-                ),
-                if (notificationsCount > 0)
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: MediaQuery.of(context).size.width * 0.012,
-                        vertical: MediaQuery.of(context).size.width * 0.004,
-                      ),
-                      decoration: const BoxDecoration(
-                        color: Colors.red,
-                        shape: BoxShape.circle,
-                      ),
-                      constraints: BoxConstraints(
-                        minWidth: MediaQuery.of(context).size.width * 0.032,
-                        minHeight: MediaQuery.of(context).size.height * 0.016,
-                      ),
-                      child: Center(
-                        child: Text(
-                          '$notificationsCount',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: MediaQuery.of(context).size.width * 0.018,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          textAlign: TextAlign.center,
+                    decoration: const BoxDecoration(
+                      color: Colors.red,
+                      shape: BoxShape.circle,
+                    ),
+                    constraints: BoxConstraints(
+                      minWidth: MediaQuery.of(context).size.width * 0.032,
+                      minHeight: MediaQuery.of(context).size.height * 0.016,
+                    ),
+                    child: Center(
+                      child: Text(
+                        '$notificationsCount',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: MediaQuery.of(context).size.width * 0.018,
+                          fontWeight: FontWeight.bold,
                         ),
+                        textAlign: TextAlign.center,
                       ),
                     ),
                   ),
-              ],
+                ),
+            ],
+          ),
+          IconButton(
+            icon: const Icon(
+              Icons.logout,
+              color: Colors.black,
             ),
-            IconButton(
-              icon: const Icon(
-                Icons.logout,
-                color: Colors.black,
-              ),
-              onPressed: () async {
-                await clearToken(context);
-              },
-            )
-          ],
+            onPressed: () async {
+              await clearToken(context);
+            },
+          )
         ],
       ),
       body: _isPermissionLoading
@@ -1365,7 +972,7 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                     Navigator.pushNamed(context, '/attendance_overview',
                         arguments: permissionCheck);
                   } else {
-                    Navigator.pushNamed(context, '/employee_hour_account',
+                    Navigator.pushNamed(context, '/attendance_attendance',
                         arguments: permissionCheck);
                   }
                 },
@@ -1373,14 +980,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             ),
             Card(
               child: GestureDetector(
-                onTap: () {
-                  setState(() {
-                    if (permissionLeaveOverviewCheck) {
-                      Navigator.pushNamed(context, '/leave_overview');
-                    } else {
-                      Navigator.pushNamed(context, '/my_leave_request');
-                    }
-                  });
+                onTap: () async {
+                  await _openLeaveModule();
                 },
                 child: ListTile(
                   leading: const Icon(Icons.calendar_month_outlined),
@@ -1398,68 +999,74 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
       ),
       extendBody: true,
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
-        notchBottomBarController: _controller,
-        color: Colors.red,
-        showLabel: true,
-        notchColor: Colors.red,
-        kBottomRadius: 28.0,
-        kIconSize: 24.0,
-        removeMargins: false,
-        bottomBarWidth: MediaQuery.of(context).size.width * 1,
-        durationInMilliSeconds: 500,
-        bottomBarItems: const [
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+          ? SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: AnimatedNotchBottomBar(
+          notchBottomBarController: _controller,
+          color: Colors.red,
+          showLabel: true,
+          notchColor: Colors.red,
+          kBottomRadius: 28.0,
+          kIconSize: 24.0,
+          removeMargins: false,
+          bottomBarWidth: MediaQuery.of(context).size.width * 1,
+          durationInMilliSeconds: 500,
+          bottomBarItems: const [
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
             ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
-            ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-          ),
-        ],
-        onTap: (index) async {
-          switch (index) {
-            case 0:
-              Future.delayed(const Duration(milliseconds: 1000), () {
-                Navigator.pushNamed(context, '/home');
-              });
-              break;
-            case 1:
-              Future.delayed(const Duration(milliseconds: 1000), () {
-                Navigator.pushNamed(context, '/employee_checkin_checkout');
-              });
-              break;
-            case 2:
-              Future.delayed(const Duration(milliseconds: 1000), () {
-                Navigator.pushNamed(context, '/employees_form',
-                    arguments: arguments);
-              });
-              break;
-          }
-        },
+          ],
+          onTap: (index) async {
+            switch (index) {
+              case 0:
+                Future.delayed(const Duration(milliseconds: 1000), () {
+                  Navigator.pushNamed(context, '/home');
+                });
+                break;
+              case 1:
+                Future.delayed(const Duration(milliseconds: 1000), () {
+                  Navigator.pushNamed(context, '/employee_checkin_checkout');
+                });
+                break;
+              case 2:
+                Future.delayed(const Duration(milliseconds: 1000), () {
+                  Navigator.pushNamed(context, '/employees_form',
+                      arguments: arguments);
+                });
+                break;
+            }
+          },
+        ),
       )
           : null,
     );

@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'notification_router.dart';
 
 class NotificationsList extends StatefulWidget {
   const NotificationsList({super.key});
@@ -156,6 +157,39 @@ class _NotificationsListState extends State<NotificationsList> {
         });
       }
     }
+  }
+
+
+  Future<void> markReadNotification(int notificationId) async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString("token");
+    var typedServerUrl = prefs.getString("typed_url");
+    var uri = Uri.parse(
+        '$typedServerUrl/api/notifications/notifications/$notificationId/');
+    var response = await http.post(uri, headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer $token",
+    });
+    if (response.statusCode == 200) {
+      notifications = notifications.map((item) {
+        if (item['id'] == notificationId) {
+          final updated = Map<String, dynamic>.from(item);
+          updated['unread'] = false;
+          return updated;
+        }
+        return item;
+      }).toList();
+      setState(() {});
+    }
+  }
+
+  Future<void> _openNotification(Map<String, dynamic> record) async {
+    final notificationId = record['id'];
+    if (notificationId is int && record['unread'] == true) {
+      await markReadNotification(notificationId);
+    }
+    if (!mounted) return;
+    await openNotificationFromRecord(context, record);
   }
 
   Future<void> clearAllNotification() async {
@@ -328,7 +362,6 @@ class _NotificationsListState extends State<NotificationsList> {
       BuildContext context, Map<String, dynamic> record, int index) {
     final timestamp = DateTime.parse(record['timestamp']);
     final timeAgo = timeago.format(timestamp);
-    final user = arguments['employee_name'];
 
     return Padding(
       padding: const EdgeInsets.all(0.0),
@@ -378,8 +411,13 @@ class _NotificationsListState extends State<NotificationsList> {
                     color: Colors.black,
                   ),
                 ),
+                onTap: () async {
+                  await _openNotification(record);
+                },
                 subtitle: Text(
-                  '$timeAgo by User $user',
+                  extractNotificationMessage(record) == (record['verb'] ?? 'Notification').toString() ? '$timeAgo' : extractNotificationMessage(record),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                       fontSize: MediaQuery.of(context).size.width * 0.035,
                       fontWeight: FontWeight.bold,

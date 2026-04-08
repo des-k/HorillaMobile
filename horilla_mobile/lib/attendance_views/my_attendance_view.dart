@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class MyAttendanceViews extends StatefulWidget {
@@ -42,6 +43,24 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
   String minimumHour = '';
   late String getToken = '';
 
+
+  String _displayTimeHHMM(dynamic raw) {
+    final s = (raw ?? '').toString().trim();
+    if (s.isEmpty || s.toLowerCase() == 'null' || s.toLowerCase() == 'none') {
+      return '—';
+    }
+    final match = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(s);
+    if (match != null) {
+      final hh = (match.group(1) ?? '0').padLeft(2, '0');
+      final mm = (match.group(2) ?? '0').padLeft(2, '0');
+      return '$hh:$mm';
+    }
+    final dt = DateTime.tryParse(s);
+    if (dt != null) {
+      return DateFormat('HH:mm').format(dt);
+    }
+    return s;
+  }
 
   @override
   void initState() {
@@ -299,7 +318,7 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
                     'Check-In',
                     style: TextStyle(color: Colors.grey.shade700),
                   ),
-                  Text(attendanceClockIn,
+                  Text(_displayTimeHHMM(attendanceClockIn),
                       style: const TextStyle(color: Colors.black)),
                 ],
               ),
@@ -313,7 +332,7 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
                     'Check-Out',
                     style: TextStyle(color: Colors.grey.shade700),
                   ),
-                  Text(attendanceClockOut,
+                  Text(_displayTimeHHMM(attendanceClockOut),
                       style: const TextStyle(color: Colors.black)),
                 ],
               ),
@@ -392,67 +411,73 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
         ),
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
-              /// Provide NotchBottomBarController
-              notchBottomBarController: _controller,
-              color: Colors.red,
-              showLabel: true,
-              notchColor: Colors.red,
-              kBottomRadius: 28.0,
-              kIconSize: 24.0,
+          ? SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: AnimatedNotchBottomBar(
+          /// Provide NotchBottomBarController
+          notchBottomBarController: _controller,
+          color: Colors.red,
+          showLabel: true,
+          notchColor: Colors.red,
+          kBottomRadius: 28.0,
+          kIconSize: 24.0,
 
-              /// restart app if you change removeMargins
-              removeMargins: false,
-              bottomBarWidth: MediaQuery.of(context).size.width * 1,
-              durationInMilliSeconds: 300,
-              bottomBarItems: const [
-                BottomBarItem(
-                  inActiveItem: Icon(
-                    Icons.home_filled,
-                    color: Colors.white,
-                  ),
-                  activeItem: Icon(
-                    Icons.home_filled,
-                    color: Colors.white,
-                  ),
-                ),
-                BottomBarItem(
-                  inActiveItem: Icon(
-                    Icons.update_outlined,
-                    color: Colors.white,
-                  ),
-                  activeItem: Icon(
-                    Icons.update_outlined,
-                    color: Colors.white,
-                  ),
-                ),
-                BottomBarItem(
-                  inActiveItem: Icon(
-                    Icons.person,
-                    color: Colors.white,
-                  ),
-                  activeItem: Icon(
-                    Icons.person,
-                    color: Colors.white,
-                  ),
-                ),
-              ],
+          /// restart app if you change removeMargins
+          removeMargins: false,
+          bottomBarWidth: MediaQuery.of(context).size.width * 1,
+          durationInMilliSeconds: 300,
+          bottomBarItems: const [
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
+            ),
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
+            ),
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
+            ),
+          ],
 
-              onTap: (index) async {
-                switch (index) {
-                  case 0:
-                    Navigator.pushNamed(context, '/home');
-                    break;
-                  case 1:
-                    Navigator.pushNamed(context, '/employee_checkin_checkout');
-                    break;
-                  case 2:
-                    Navigator.pushNamed(context, '/employees_form',
-                        arguments: arguments);
-                    break;
-                }
-              },
-            )
+          onTap: (index) async {
+            switch (index) {
+              case 0:
+                Navigator.pushNamed(context, '/home');
+                break;
+              case 1:
+                Navigator.pushNamed(context, '/employee_checkin_checkout');
+                break;
+              case 2:
+                Navigator.pushNamed(context, '/employees_form',
+                    arguments: arguments);
+                break;
+            }
+          },
+        ),
+      )
           : null,
     );
   }

@@ -1,30 +1,87 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:shimmer/main.dart';
+import 'package:horilla/horilla_main/home.dart';
+import 'package:horilla/horilla_main/login.dart';
+import 'package:horilla/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('LoginApp boots a MaterialApp with the root future page', (tester) async {
+    SharedPreferences.setMockInitialValues({});
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpWidget(LoginApp());
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.byType(FutureBuilderPage), findsOneWidget);
+    expect(find.byType(SplashScreen), findsOneWidget);
+    expect(find.byType(LoginPage), findsNothing);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.byType(FutureBuilderPage), findsOneWidget);
+    expect(find.byType(SplashScreen), findsNothing);
+    expect(find.byType(LoginPage), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('FutureBuilderPage routes authenticated users to the home page shell', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'token': 'cached-token',
+      'typed_url': 'https://demo.example.com',
+    });
+
+    await tester.pumpWidget(LoginApp());
+    await tester.pump();
+
+    expect(find.byType(SplashScreen), findsOneWidget);
+    expect(find.byType(HomePage), findsNothing);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.byType(FutureBuilderPage), findsOneWidget);
+    expect(find.byType(HomePage), findsOneWidget);
+  });
+
+  testWidgets('FutureBuilderPage handles invalid persisted auth state safely', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'token': '   ',
+      'typed_url': 'https://demo.example.com',
+    });
+
+    await tester.pumpWidget(LoginApp());
+    await tester.pump();
+    expect(find.byType(SplashScreen), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LoginPage), findsOneWidget);
+    expect(find.byType(HomePage), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('root app falls back cleanly when stored host/token is partial or corrupt', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'token': 'cached-token',
+      'typed_url': 'not-a-valid-url',
+    });
+
+    await tester.pumpWidget(LoginApp());
+    await tester.pump();
+    expect(find.byType(SplashScreen), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(LoginPage), findsOneWidget);
+    expect(find.byType(HomePage), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

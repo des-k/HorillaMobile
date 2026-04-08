@@ -9,6 +9,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'dart:io';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:shimmer/shimmer.dart';
+import '../res/utilities/permission_guard.dart';
 
 class MyLeaveRequest extends StatefulWidget {
   const MyLeaveRequest({super.key});
@@ -19,6 +20,49 @@ class MyLeaveRequest extends StatefulWidget {
 
 class _MyLeaveRequest extends State<MyLeaveRequest>
     with SingleTickerProviderStateMixin {
+  String? _permissionStatusMessage;
+  late Future<void> _permissionFuture;
+
+  void _rememberPermissionMessage(String? message) {
+    if (message == null || message.trim().isEmpty) {
+      return;
+    }
+    _permissionStatusMessage ??= message;
+    if (mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+      });
+    }
+  }
+
+  Future<void> _runGuardedLeavePermissionCheck(String path, VoidCallback onAllowed) async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString("token");
+    final typedServerUrl = prefs.getString("typed_url");
+    if (typedServerUrl == null || typedServerUrl.isEmpty) {
+      _rememberPermissionMessage('Server error. Try again later.');
+      return;
+    }
+    final result = await guardedPermissionGet(
+      Uri.parse('$typedServerUrl$path'),
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer $token",
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      permissionMyLeaveRequestCheck = true;
+      permissionLeaveAllocationCheck = true;
+      if (result.isAllowed) {
+        onAllowed();
+      } else if (!result.isForbidden) {
+        _rememberPermissionMessage(result.message);
+      }
+    });
+  }
+
   final ScrollController _scrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final _controller = NotchBottomBarController(index: -1);
@@ -98,14 +142,86 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     return encodedFile;
   }
 
-  String selectedEndDateValue = '';
+  void _applyDefaultFullDayBreakdowns() {
+    editStartDateBreakdown = breakdownMaps[_fullDayKey];
+    editEndDateBreakdown = breakdownMaps[_fullDayKey];
+    selectedStartDateValue = _fullDayKey;
+    selectedEndDateValue = _fullDayKey;
+    _validateStartDateBreakdown = false;
+    _validateEndDateBreakdown = false;
+  }
+
+  String? _validateLeaveRangeLocally({
+    required String startDateText,
+    required String endDateText,
+    required String startBreakdownKey,
+    required String endBreakdownKey,
+  }) {
+    try {
+      final parsedStart = DateTime.parse(startDateText);
+      final parsedEnd = DateTime.parse(endDateText);
+
+      if (parsedEnd.isBefore(parsedStart)) {
+        return 'End date should not be less than start date.';
+      }
+
+      if (parsedStart.year == parsedEnd.year &&
+          parsedStart.month == parsedEnd.month &&
+          parsedStart.day == parsedEnd.day &&
+          startBreakdownKey != endBreakdownKey) {
+        return 'There is a mismatch in the breakdown of the start date and end date.';
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  Widget _buildBreakdownDropdown({
+    required String label,
+    required String? selectedKey,
+    required bool hasError,
+    required ValueChanged<String?> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.all(4.0),
+      child: DropdownSearch<String>(
+        items: breakdownMaps.values.toList().cast<String>(),
+        selectedItem: selectedKey == null || selectedKey.isEmpty
+            ? null
+            : breakdownMaps[selectedKey],
+        onChanged: onChanged,
+        popupProps: PopupProps.menu(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.23,
+          ),
+          showSearchBox: false,
+        ),
+        dropdownDecoratorProps: DropDownDecoratorProps(
+          dropdownSearchDecoration: InputDecoration(
+            border: const OutlineInputBorder(),
+            labelText: label,
+            labelStyle: TextStyle(color: Colors.grey[350]),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 10.0),
+            errorText: hasError ? 'Please select $label' : null,
+          ),
+        ),
+      ),
+    );
+  }
+
+  static const String _fullDayKey = 'full_day';
+  static const String _fullDayLabel = 'Full Day';
+
+  String selectedEndDateValue = _fullDayKey;
   String employeeName = '';
   String? _errorMessage;
   String? selectedLeaveType;
   String? editleaveType;
-  String? editEndDateBreakdown;
-  String? editStartDateBreakdown;
-  String selectedStartDateValue = '';
+  String? editEndDateBreakdown = _fullDayLabel;
+  String? editStartDateBreakdown = _fullDayLabel;
+  String selectedStartDateValue = _fullDayKey;
   String? selectedFilePath;
   String? selectedLeaveId;
   List<Map<String, dynamic>> requestsEmployeesName = [];
@@ -134,6 +250,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   @override
   void initState() {
     super.initState();
+    _permissionFuture = checkPermissions();
     currentPage = 1;
     getMyAllLeaveRequestFirstPage();
     _scrollController.addListener(_scrollListener);
@@ -182,79 +299,27 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   }
 
   Future<void> permissionLeaveOverviewChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-perm/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
+    await _runGuardedLeavePermissionCheck('/api/leave/check-perm/', () {
       permissionLeaveOverviewCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
+    });
   }
 
   Future<void> permissionLeaveTypeChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-type/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
+    await _runGuardedLeavePermissionCheck('/api/leave/check-type/', () {
       permissionLeaveTypeCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
+    });
   }
 
   Future<void> permissionLeaveRequestChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-request/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
+    await _runGuardedLeavePermissionCheck('/api/leave/check-request/', () {
       permissionLeaveRequestCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
+    });
   }
 
   Future<void> permissionLeaveAssignChecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/check-assign/');
-    var response = await http.get(uri, headers: {
-      "Content-Type": "application/json",
-      "Authorization": "Bearer $token",
-    });
-    if (response.statusCode == 200) {
+    await _runGuardedLeavePermissionCheck('/api/leave/check-assign/', () {
       permissionLeaveAssignCheck = true;
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    } else {
-      permissionMyLeaveRequestCheck = true;
-      permissionLeaveAllocationCheck = true;
-    }
+    });
   }
 
   void prefetchData() async {
@@ -336,7 +401,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     var typedServerUrl = prefs.getString("typed_url");
 
     final uri = Uri.parse(
-        '$typedServerUrl/api/leave/user-request?employee_id=$employeeId&page=$page');
+        '$typedServerUrl/api/leave/user-request/?employee_id=$employeeId&page=$page');
 
     final response = await http.get(uri, headers: {
       "Content-Type": "application/json",
@@ -520,30 +585,14 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.01),
-                          DropdownButtonFormField<int>(
-                            style: const TextStyle(
-                              fontWeight: FontWeight.normal,
-                              color: Colors.black,
-                            ),
-                            value: leaveTypeId,
-                            items: [
-                              DropdownMenuItem<int>(
-                                value: leaveTypeId,
-                                child: Text(leaveTypeName),
-                              ),
-                            ],
+                          TextField(
+                            readOnly: true,
+                            controller: TextEditingController(text: leaveTypeName),
                             decoration: const InputDecoration(
                               border: OutlineInputBorder(),
                               contentPadding:
                               EdgeInsets.symmetric(horizontal: 10.0),
                             ),
-                            onChanged: (int? newValue) {
-                              setState(() {
-                                leaveTypeId = newValue!;
-                              });
-                            },
-                            disabledHint: const Text('Leave type pre-filled'),
-                            isExpanded: true,
                           ),
                           SizedBox(
                               height:
@@ -590,43 +639,21 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.01),
-                          Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: DropdownSearch<String>(
-                              items:
-                              breakdownMaps.values.toList().cast<String>(),
-                              selectedItem: editStartDateBreakdown,
-                              onChanged: (newValue) {
-                                if (newValue != null) {
-                                  setState(() {
-                                    editStartDateBreakdown = newValue;
-                                    selectedStartDateValue = breakdownMaps
-                                        .entries
-                                        .firstWhere(
-                                            (entry) => entry.value == newValue)
-                                        .key;
-                                    _validateStartDateBreakdown = false;
-                                  });
-                                }
-                              },
-                              dropdownDecoratorProps: DropDownDecoratorProps(
-                                dropdownSearchDecoration: InputDecoration(
-                                  errorText: _validateStartDateBreakdown
-                                      ? 'Please select a Start Date Breakdown'
-                                      : null,
-                                  border: const OutlineInputBorder(),
-                                  labelText: "Start Date Breakdown",
-                                  labelStyle:
-                                  TextStyle(color: Colors.grey[350]),
-                                  contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10.0),
-                                ),
-                              ),
-                              popupProps: PopupProps.menu(
-                                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.23), // Set your desired height
-                                showSearchBox: false,
-                              ),
-                            ),
+                          _buildBreakdownDropdown(
+                            label: "Start Date Breakdown",
+                            selectedKey: selectedStartDateValue,
+                            hasError: _validateStartDateBreakdown,
+                            onChanged: (newValue) {
+                              if (newValue == null) return;
+                              final selectedKey = breakdownMaps.entries
+                                  .firstWhere((entry) => entry.value == newValue)
+                                  .key;
+                              setState(() {
+                                selectedStartDateValue = selectedKey;
+                                editStartDateBreakdown = newValue;
+                                _validateStartDateBreakdown = false;
+                              });
+                            },
                           ),
                           SizedBox(
                               height:
@@ -672,42 +699,21 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.01),
-                          Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: DropdownSearch<String>(
-                              items:
-                              breakdownMaps.values.toList().cast<String>(),
-                              selectedItem: editEndDateBreakdown,
-                              onChanged: (newValue) {
-                                setState(() {
-                                  if (newValue != null) {
-                                    editEndDateBreakdown = newValue;
-                                    selectedEndDateValue = breakdownMaps.entries
-                                        .firstWhere(
-                                            (entry) => entry.value == newValue)
-                                        .key;
-                                    _validateEndDateBreakdown = false;
-                                  }
-                                });
-                              },
-                              dropdownDecoratorProps: DropDownDecoratorProps(
-                                dropdownSearchDecoration: InputDecoration(
-                                  errorText: _validateEndDateBreakdown
-                                      ? 'Please select an End Date Breakdown'
-                                      : null,
-                                  border: const OutlineInputBorder(),
-                                  labelText: "End Date Breakdown",
-                                  labelStyle:
-                                  TextStyle(color: Colors.grey[350]),
-                                  contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10.0),
-                                ),
-                              ),
-                              popupProps: PopupProps.menu(
-                                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.23), // Set your desired height
-                                showSearchBox: false,
-                              ),
-                            ),
+                          _buildBreakdownDropdown(
+                            label: "End Date Breakdown",
+                            selectedKey: selectedEndDateValue,
+                            hasError: _validateEndDateBreakdown,
+                            onChanged: (newValue) {
+                              if (newValue == null) return;
+                              final selectedKey = breakdownMaps.entries
+                                  .firstWhere((entry) => entry.value == newValue)
+                                  .key;
+                              setState(() {
+                                selectedEndDateValue = selectedKey;
+                                editEndDateBreakdown = newValue;
+                                _validateEndDateBreakdown = false;
+                              });
+                            },
                           ),
                           SizedBox(
                               height:
@@ -956,59 +962,58 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.01),
-                          TypeAheadField<String>(
-                            textFieldConfiguration: TextFieldConfiguration(
-                              controller: _typeAheadEditController,
-                              decoration: InputDecoration(
-                                labelText: 'Choose a Leave Type',
-                                labelStyle: TextStyle(color: Colors.grey[350]),
-                                border: const OutlineInputBorder(),
-                                contentPadding:
-                                const EdgeInsets.symmetric(horizontal: 10.0),
-                                errorText: _validateLeaveType
-                                    ? 'Please select a leave type'
-                                    : null,
+                          Padding(
+                            padding: const EdgeInsets.all(4.0),
+                            child: DropdownSearch<String>(
+                              items: leaveItem,
+                              selectedItem: editleaveType,
+                              onChanged: (newValue) {
+                                if (newValue != null) {
+                                  setState(() {
+                                    _typeAheadEditController.text = newValue;
+                                    editleaveType = newValue;
+                                    selectedLeaveId = leaveItemsIdMap[newValue];
+                                    _validateLeaveType = false;
+                                  });
+                                }
+                              },
+                              dropdownDecoratorProps: DropDownDecoratorProps(
+                                dropdownSearchDecoration: InputDecoration(
+                                  labelText: 'Choose a Leave Type',
+                                  labelStyle:
+                                  TextStyle(color: Colors.grey[350]),
+                                  border: const OutlineInputBorder(),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 10.0),
+                                  errorText: _validateLeaveType
+                                      ? 'Please select a leave type'
+                                      : null,
+                                ),
                               ),
-                            ),
-                            suggestionsCallback: (pattern) {
-                              return leaveItem
-                                  .where((leaveType) => leaveType
-                                  .toLowerCase()
-                                  .contains(pattern.toLowerCase()))
-                                  .toList();
-                            },
-                            itemBuilder: (context, String suggestion) {
-                              return ListTile(
-                                title: Text(suggestion),
-                              );
-                            },
-                            onSuggestionSelected: (String suggestion) {
-                              setState(() {
-                                _typeAheadEditController.text = suggestion;
-                                editleaveType = suggestion;
-                                selectedLeaveId = leaveItemsIdMap[suggestion];
-                                _validateLeaveType = false;
-                              });
-                            },
-                            noItemsFoundBuilder: (context) => const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text(
-                                'No Leave Types Found',
-                                style: TextStyle(fontSize: 16),
+                              popupProps: PopupProps.menu(
+                                showSearchBox: true,
+                                constraints: BoxConstraints(
+                                  maxHeight:
+                                  MediaQuery.of(context).size.height * 0.23,
+                                ),
+                                searchFieldProps: TextFieldProps(
+                                  decoration: InputDecoration(
+                                    hintText: 'Search Leave Type',
+                                    contentPadding:
+                                    const EdgeInsets.symmetric(
+                                        horizontal: 10.0),
+                                    border: const OutlineInputBorder(),
+                                  ),
+                                ),
+                                emptyBuilder: (context, searchEntry) =>
+                                const Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Text(
+                                    'No Leave Types Found',
+                                    style: TextStyle(fontSize: 16),
+                                  ),
+                                ),
                               ),
-                            ),
-                            errorBuilder: (context, error) => Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Error: $error',
-                                style: const TextStyle(fontSize: 16),
-                              ),
-                            ),
-                            hideOnEmpty: true,
-                            hideOnError: false,
-                            suggestionsBoxDecoration: SuggestionsBoxDecoration(
-                              constraints: BoxConstraints(
-                                  maxHeight: MediaQuery.of(context).size.height * 0.23), // Limit height
                             ),
                           ),
                           SizedBox(
@@ -1056,43 +1061,21 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.01),
-                          Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: DropdownSearch<String>(
-                              items:
-                              breakdownMaps.values.toList().cast<String>(),
-                              selectedItem: editStartDateBreakdown,
-                              onChanged: (newValue) {
-                                if (newValue != null) {
-                                  setState(() {
-                                    editStartDateBreakdown = newValue;
-                                    selectedStartDateValue = breakdownMaps
-                                        .entries
-                                        .firstWhere(
-                                            (entry) => entry.value == newValue)
-                                        .key;
-                                    _validateStartDateBreakdown = false;
-                                  });
-                                }
-                              },
-                              dropdownDecoratorProps: DropDownDecoratorProps(
-                                dropdownSearchDecoration: InputDecoration(
-                                  errorText: _validateStartDateBreakdown
-                                      ? 'Please select a Start Date Breakdown'
-                                      : null,
-                                  border: const OutlineInputBorder(),
-                                  labelText: "Start Date Breakdown",
-                                  labelStyle:
-                                  TextStyle(color: Colors.grey[350]),
-                                  contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10.0),
-                                ),
-                              ),
-                              popupProps: PopupProps.menu(
-                                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.23), // Set your desired height
-                                showSearchBox: false,
-                              ),
-                            ),
+                          _buildBreakdownDropdown(
+                            label: "Start Date Breakdown",
+                            selectedKey: selectedStartDateValue,
+                            hasError: _validateStartDateBreakdown,
+                            onChanged: (newValue) {
+                              if (newValue == null) return;
+                              final selectedKey = breakdownMaps.entries
+                                  .firstWhere((entry) => entry.value == newValue)
+                                  .key;
+                              setState(() {
+                                selectedStartDateValue = selectedKey;
+                                editStartDateBreakdown = newValue;
+                                _validateStartDateBreakdown = false;
+                              });
+                            },
                           ),
                           SizedBox(
                               height:
@@ -1138,42 +1121,21 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.01),
-                          Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: DropdownSearch<String>(
-                              items:
-                              breakdownMaps.values.toList().cast<String>(),
-                              selectedItem: editEndDateBreakdown,
-                              onChanged: (newValue) {
-                                setState(() {
-                                  if (newValue != null) {
-                                    editEndDateBreakdown = newValue;
-                                    selectedEndDateValue = breakdownMaps.entries
-                                        .firstWhere(
-                                            (entry) => entry.value == newValue)
-                                        .key;
-                                    _validateEndDateBreakdown = false;
-                                  }
-                                });
-                              },
-                              dropdownDecoratorProps: DropDownDecoratorProps(
-                                dropdownSearchDecoration: InputDecoration(
-                                  errorText: _validateEndDateBreakdown
-                                      ? 'Please select an End Date Breakdown'
-                                      : null,
-                                  border: const OutlineInputBorder(),
-                                  labelText: "End Date Breakdown",
-                                  labelStyle:
-                                  TextStyle(color: Colors.grey[350]),
-                                  contentPadding:
-                                  const EdgeInsets.symmetric(horizontal: 10.0),
-                                ),
-                              ),
-                              popupProps: PopupProps.menu(
-                                constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.23), // Set your desired height
-                                showSearchBox: false,
-                              ),
-                            ),
+                          _buildBreakdownDropdown(
+                            label: "End Date Breakdown",
+                            selectedKey: selectedEndDateValue,
+                            hasError: _validateEndDateBreakdown,
+                            onChanged: (newValue) {
+                              if (newValue == null) return;
+                              final selectedKey = breakdownMaps.entries
+                                  .firstWhere((entry) => entry.value == newValue)
+                                  .key;
+                              setState(() {
+                                selectedEndDateValue = selectedKey;
+                                editEndDateBreakdown = newValue;
+                                _validateEndDateBreakdown = false;
+                              });
+                            },
                           ),
                           SizedBox(
                               height:
@@ -1924,7 +1886,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                   'end_date_breakdown': editEndDateBreakdown ??
                                       record['end_date_breakdown'],
                                   'start_date_breakdown': editStartDateBreakdown ??
-                                      record['end_date_breakdown'],
+                                      record['start_date_breakdown'],
                                   'status': record['status'],
                                   'leave_type': editleaveType ??
                                       record['leave_type_id']['name'],
@@ -2025,7 +1987,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     var typedServerUrl = prefs.getString("typed_url");
     if (currentPage != 0) {
       var uri = Uri.parse(
-          '$typedServerUrl/api/leave/user-request?employee_id=$employeeId&page=$currentPage');
+          '$typedServerUrl/api/leave/user-request/?employee_id=$employeeId&page=$currentPage');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
@@ -2057,7 +2019,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     } else {
       currentPage = 1;
       var uri = Uri.parse(
-          '$typedServerUrl/api/leave/user-request?employee_id=$employeeId');
+          '$typedServerUrl/api/leave/user-request/?employee_id=$employeeId');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
@@ -2091,7 +2053,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
 
-    var uri = Uri.parse('$typedServerUrl/api/leave/user-request/$recordId');
+    var uri = Uri.parse('$typedServerUrl/api/leave/user-request/$recordId/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -2148,6 +2110,17 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
 
   Future<void> createNewLeaveType(Map<String, dynamic> createdDetails,
       checkfile, String fileName, String filePath) async {
+    final validationError = _validateLeaveRangeLocally(
+      startDateText: createdDetails['start_date'],
+      endDateText: createdDetails['end_date'],
+      startBreakdownKey: createdDetails['start_date_breakdown'],
+      endBreakdownKey: createdDetails['end_date_breakdown'],
+    );
+    if (validationError != null) {
+      _errorMessage = validationError;
+      isSaveClick = true;
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -2180,10 +2153,11 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
       _errorMessage = null;
       currentPage = 0;
       await getMyAllLeaveRequest();
-      getRequestedCount();
-      getApprovedCount();
-      getCancelledCount();
-      getRejectedCount();
+      await getRequestedCount();
+      await getApprovedCount();
+      await getCancelledCount();
+      await getRejectedCount();
+      await getUserLeaveRequest();
       setState(() {});
     } else if (response.statusCode == 400) {
       isSaveClick = true;
@@ -2205,8 +2179,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
       } else {
         _errorMessage = "An unknown error occurred.";
       }
-      Navigator.of(context).pop(true);
-      _showCreateDialog(context);
     } else {
       var responseBody = await response.stream.bytesToString();
 
@@ -2232,6 +2204,17 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
 
   Future<void> updateRequest(Map<String, dynamic> updatedDetails, checkfile,
       String fileName, String filePath) async {
+    final validationError = _validateLeaveRangeLocally(
+      startDateText: updatedDetails['start_date'],
+      endDateText: updatedDetails['end_date'],
+      startBreakdownKey: updatedDetails['start_date_breakdown'],
+      endBreakdownKey: updatedDetails['end_date_breakdown'],
+    );
+    if (validationError != null) {
+      _errorMessage = validationError;
+      isSaveClick = true;
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -2294,7 +2277,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/leave/user-request');
+    var uri = Uri.parse('$typedServerUrl/api/leave/user-request/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -2306,7 +2289,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     }
   }
 
-  Future<void> cancelRequest(int cancelId, String description) async {
+  Future<void> cancelRequest(int cancelId) async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -2316,15 +2299,15 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
       "Authorization": "Bearer $token",
     });
     if (response.statusCode == 200) {
-      setState(() {
-        for (var request in myAllRequests) {
-          if (request['id'] == cancelId) {
-            request['status'] = 'cancelled';
-            request['description'] = description;
-            break;
-          }
-        }
-      });
+      currentPage = 1;
+      await getMyAllLeaveRequest();
+      await getUserLeaveRequest();
+      await getRequestedCount();
+      await getApprovedCount();
+      await getCancelledCount();
+      await getRejectedCount();
+      await getCurrentLeaveRequest(cancelId.toString());
+      setState(() {});
     }
   }
 
@@ -2344,10 +2327,11 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
         myAllRequests.removeWhere((item) => item['id'] == leaveId);
       });
       await getMyAllLeaveRequest();
-      getRequestedCount();
-      getApprovedCount();
-      getCancelledCount();
-      getRejectedCount();
+      await getRequestedCount();
+      await getApprovedCount();
+      await getCancelledCount();
+      await getRejectedCount();
+      await getUserLeaveRequest();
     }
     else {
       isSaveClick = true;
@@ -2490,12 +2474,12 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
 
                         _errorMessage = null;
                         selectedLeaveId = null;
-                        editStartDateBreakdown = null;
-                        editEndDateBreakdown = null;
+                        _applyDefaultFullDayBreakdowns();
                         startDateSelect.clear();
                         endDateSelect.clear();
                         descriptionSelect.clear();
                         _fileNameController.clear();
+                        editleaveType = null;
                         _typeAheadEditController.clear();
                       });
                       _showCreateDialog(context);
@@ -2735,7 +2719,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
       ),
       drawer: Drawer(
         child: FutureBuilder<void>(
-          future: checkPermissions(),
+          future: _permissionFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return ListView(
@@ -2817,6 +2801,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                   )
                       : const SizedBox.shrink(),
 
+                  /*
                   permissionLeaveAllocationCheck
                       ? ListTile(
                     title: const Text('Leave Allocation Request'),
@@ -2826,6 +2811,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                     },
                   )
                       : const SizedBox.shrink(),
+                   */
 
                   permissionLeaveAssignCheck
                       ? ListTile(
@@ -2843,66 +2829,72 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
         ),
       ),
       bottomNavigationBar: (bottomBarPages.length <= maxCount)
-          ? AnimatedNotchBottomBar(
-        /// Provide NotchBottomBarController
-        notchBottomBarController: _controller,
-        color: Colors.red,
-        showLabel: true,
-        notchColor: Colors.red,
-        kBottomRadius: 28.0,
-        kIconSize: 24.0,
+          ? SafeArea(
+        top: false,
+        left: false,
+        right: false,
+        bottom: true,
+        child: AnimatedNotchBottomBar(
+          /// Provide NotchBottomBarController
+          notchBottomBarController: _controller,
+          color: Colors.red,
+          showLabel: true,
+          notchColor: Colors.red,
+          kBottomRadius: 28.0,
+          kIconSize: 24.0,
 
-        /// restart app if you change removeMargins
-        removeMargins: false,
-        bottomBarWidth: MediaQuery.of(context).size.width * 1,
-        durationInMilliSeconds: 300,
-        bottomBarItems: const [
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+          /// restart app if you change removeMargins
+          removeMargins: false,
+          bottomBarWidth: MediaQuery.of(context).size.width * 1,
+          durationInMilliSeconds: 300,
+          bottomBarItems: const [
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.home_filled,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.home_filled,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.update_outlined,
+                color: Colors.white,
+              ),
             ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
+            BottomBarItem(
+              inActiveItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
+              activeItem: Icon(
+                Icons.person,
+                color: Colors.white,
+              ),
             ),
-            activeItem: Icon(
-              Icons.update_outlined,
-              color: Colors.white,
-            ),
-          ),
-          BottomBarItem(
-            inActiveItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-            activeItem: Icon(
-              Icons.person,
-              color: Colors.white,
-            ),
-          ),
-        ],
+          ],
 
-        onTap: (index) async {
-          switch (index) {
-            case 0:
-              Navigator.pushNamed(context, '/home');
-              break;
-            case 1:
-              Navigator.pushNamed(context, '/employee_checkin_checkout');
-              break;
-            case 2:
-              Navigator.pushNamed(context, '/employees_form',
-                  arguments: arguments);
-              break;
-          }
-        },
+          onTap: (index) async {
+            switch (index) {
+              case 0:
+                Navigator.pushNamed(context, '/home');
+                break;
+              case 1:
+                Navigator.pushNamed(context, '/employee_checkin_checkout');
+                break;
+              case 2:
+                Navigator.pushNamed(context, '/employees_form',
+                    arguments: arguments);
+                break;
+            }
+          },
+        ),
       )
           : null,
     );
@@ -3405,7 +3397,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                       context,
                                       MaterialPageRoute(
                                         builder: (context) => ImageViewer(
-                                            imagePath: baseUrl + pdfPath,
+                                          imagePath: baseUrl + pdfPath,
                                           token: getToken,),
                                       ),
                                     );
@@ -3557,8 +3549,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                           record['start_date'] ?? '';
                                       endDateInput.text =
                                           record['end_date'] ?? '';
-                                      editStartDateBreakdown = null;
-                                      editEndDateBreakdown = null;
+                                      _applyDefaultFullDayBreakdowns();
 
                                       getAllLeaveTypeName();
                                       getMyAllLeaveRequest();
@@ -3771,21 +3762,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                               "\nAre you sure you want to cancel this leave request?\n",
                                               style: TextStyle(fontSize: 15.0),
                                             ),
-                                            SizedBox(
-                                                width: MediaQuery.of(context)
-                                                    .size
-                                                    .width *
-                                                    0.01),
-                                            TextField(
-                                              controller: descriptionLeaveType,
-                                              decoration: const InputDecoration(
-                                                hintText: "",
-                                                border: OutlineInputBorder(),
-                                                contentPadding:
-                                                EdgeInsets.symmetric(
-                                                    horizontal: 10.0),
-                                              ),
-                                            ),
                                           ],
                                         ),
                                       ),
@@ -3793,11 +3769,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                         ElevatedButton(
                                           onPressed: () async {
                                             var cancelId = record['id'];
-                                            var description =
-                                                descriptionLeaveType
-                                                    .text; // Get description
-                                            await cancelRequest(
-                                                cancelId, description);
+                                            await cancelRequest(cancelId);
                                             Navigator.of(context).pop(true);
                                             showCancelAnimation();
                                           },
@@ -3872,8 +3844,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
 
           _errorMessage = null;
           selectedLeaveId = null;
-          editStartDateBreakdown = null;
-          editEndDateBreakdown = null;
+          _applyDefaultFullDayBreakdowns();
           startDateSelect.clear();
           endDateSelect.clear();
           descriptionSelect.clear();
@@ -4148,14 +4119,14 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
               final profile = record['leave_type_id']?['icon'] ?? '';
               final stateInfo = _getStateInfo(record['status']);
               return buildMyLeaveTab(
-                breakdown,
-                context,
-                record,
-                fullName,
-                profile,
-                stateInfo,
-                recordId,
-                getToken
+                  breakdown,
+                  context,
+                  record,
+                  fullName,
+                  profile,
+                  stateInfo,
+                  recordId,
+                  getToken
               );
             },
           ),
