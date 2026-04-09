@@ -893,19 +893,23 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     var response = await request.send();
     if (response.statusCode == 200) {
       _errorMessage = null;
-      getEmployeeDetails();
-      setState(() {});
-      setState(() {
-        isLoadingImage = false;
-      });
+      await getEmployeeDetails();
+      if (mounted) {
+        setState(() {
+          isLoadingImage = false;
+        });
+      }
     } else {
       var responseBody = await response.stream.bytesToString();
       var errorJson = jsonDecode(responseBody);
       if (errorJson.containsKey('non_field_errors')) {
         _errorMessage = errorJson['non_field_errors'].join('\n');
-        setState(() {});
       }
-      setState(() {});
+      if (mounted) {
+        setState(() {
+          isLoadingImage = false;
+        });
+      }
     }
   }
 
@@ -1231,21 +1235,29 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Future<void> _pickImage(int id) async {
-    isLoadingImage = true;
-    XFile? file = await uploadFile(context);
-    if (file != null) {
-      setState(() async {
-        pickedFile = file;
-        fileName = file.name;
-        filePath = file.path;
-        checkFile = true;
-        Map<String, dynamic> updatedDetails = {
-          "id": id,
-        };
-        await updateEmployeeImage(
-            updatedDetails, checkFile, fileName, filePath);
+    if (mounted) {
+      setState(() {
+        isLoadingImage = true;
       });
     }
+    XFile? file = await uploadFile(context);
+    if (file == null) {
+      if (mounted) {
+        setState(() {
+          isLoadingImage = false;
+        });
+      }
+      return;
+    }
+
+    pickedFile = file;
+    fileName = file.name;
+    filePath = file.path;
+    checkFile = true;
+    Map<String, dynamic> updatedDetails = {
+      "id": id,
+    };
+    await updateEmployeeImage(updatedDetails, checkFile, fileName, filePath);
   }
 
   Future<String?> showCustomDatePicker(
@@ -4114,20 +4126,13 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                     employeeDetails['employee_profile']
                                         .isNotEmpty)
                                   Positioned.fill(
-                                    child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            employeeDetails['employee_profile'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person);
-                                        },
+                                    child: AuthenticatedNetworkImage(
+                                      imageUrl: _absoluteMediaUrl(
+                                        (employeeDetails['employee_profile'] ?? '').toString(),
                                       ),
+                                      fit: BoxFit.cover,
+                                      borderRadius: BorderRadius.circular(999),
+                                      errorWidget: const Icon(Icons.person),
                                     ),
                                   ),
                                 if (employeeDetails['employee_profile'] ==
