@@ -153,6 +153,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   bool isAction = false;
   bool checkFile = false;
   bool isLoadingImage = false;
+  int _employeeProfileImageVersion = 0;
   XFile? pickedFile;
   late String getToken = '';
 
@@ -229,6 +230,16 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     if (baseUrl.trim().isEmpty) return value;
     if (value.startsWith('/')) return '${baseUrl.trim()}$value';
     return '${baseUrl.trim()}/$value';
+  }
+
+  String _cacheBustedUrl(String raw, int version) {
+    final resolved = _absoluteMediaUrl(raw);
+    if (resolved.isEmpty || version <= 0) return resolved;
+    final uri = Uri.tryParse(resolved);
+    if (uri == null) return resolved;
+    final params = Map<String, String>.from(uri.queryParameters);
+    params['v'] = version.toString();
+    return uri.replace(queryParameters: params).toString();
   }
 
   bool _hasHomeCoordinates(Map<String, dynamic> wfhProfile) {
@@ -886,13 +897,24 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
     if (checkFile) {
       var attachment =
-      await http.MultipartFile.fromPath('employee_profile', filePath);
+          await http.MultipartFile.fromPath('employee_profile', filePath);
       request.files.add(attachment);
     }
     request.headers['Authorization'] = 'Bearer $token';
     var response = await request.send();
+    final responseBody = await response.stream.bytesToString();
     if (response.statusCode == 200) {
       _errorMessage = null;
+      final refreshVersion = DateTime.now().millisecondsSinceEpoch;
+      try {
+        final responseData = jsonDecode(responseBody);
+        if (mounted) {
+          setState(() {
+            employeeDetails = Map<String, dynamic>.from(responseData);
+            _employeeProfileImageVersion = refreshVersion;
+          });
+        }
+      } catch (_) {}
       await getEmployeeDetails();
       if (mounted) {
         setState(() {
@@ -900,10 +922,17 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
         });
       }
     } else {
-      var responseBody = await response.stream.bytesToString();
-      var errorJson = jsonDecode(responseBody);
-      if (errorJson.containsKey('non_field_errors')) {
-        _errorMessage = errorJson['non_field_errors'].join('\n');
+      try {
+        var errorJson = jsonDecode(responseBody);
+        if (errorJson.containsKey('non_field_errors')) {
+          _errorMessage = errorJson['non_field_errors'].join('\n');
+        } else if (errorJson.containsKey('employee_profile')) {
+          _errorMessage = errorJson['employee_profile'].join('\n');
+        } else {
+          _errorMessage = 'Failed to update employee image';
+        }
+      } catch (_) {
+        _errorMessage = 'Failed to update employee image';
       }
       if (mounted) {
         setState(() {
@@ -1235,11 +1264,9 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Future<void> _pickImage(int id) async {
-    if (mounted) {
-      setState(() {
-        isLoadingImage = true;
-      });
-    }
+    setState(() {
+      isLoadingImage = true;
+    });
     XFile? file = await uploadFile(context);
     if (file == null) {
       if (mounted) {
@@ -1257,7 +1284,8 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     Map<String, dynamic> updatedDetails = {
       "id": id,
     };
-    await updateEmployeeImage(updatedDetails, checkFile, fileName, filePath);
+    await updateEmployeeImage(
+        updatedDetails, checkFile, fileName, filePath);
   }
 
   Future<String?> showCustomDatePicker(
@@ -4126,13 +4154,15 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                     employeeDetails['employee_profile']
                                         .isNotEmpty)
                                   Positioned.fill(
-                                    child: AuthenticatedNetworkImage(
-                                      imageUrl: _absoluteMediaUrl(
-                                        (employeeDetails['employee_profile'] ?? '').toString(),
+                                    child: ClipOval(
+                                      child: AuthenticatedNetworkImage(
+                                        imageUrl: _cacheBustedUrl(
+                                          (employeeDetails['employee_profile'] ?? '').toString(),
+                                          _employeeProfileImageVersion,
+                                        ),
+                                        fit: BoxFit.cover,
+                                        errorWidget: const Icon(Icons.person),
                                       ),
-                                      fit: BoxFit.cover,
-                                      borderRadius: BorderRadius.circular(999),
-                                      errorWidget: const Icon(Icons.person),
                                     ),
                                   ),
                                 if (employeeDetails['employee_profile'] ==
