@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class AuthenticatedNetworkImage extends StatelessWidget {
+class AuthenticatedNetworkImage extends StatefulWidget {
   final String imageUrl;
   final double? width;
   final double? height;
@@ -21,44 +21,74 @@ class AuthenticatedNetworkImage extends StatelessWidget {
     this.placeholder,
   });
 
-  Future<String?> _loadToken() async {
+  @override
+  State<AuthenticatedNetworkImage> createState() => _AuthenticatedNetworkImageState();
+}
+
+class _AuthenticatedNetworkImageState extends State<AuthenticatedNetworkImage> {
+  String? _token;
+  bool _loadingToken = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadToken();
+  }
+
+  Future<void> _loadToken() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('token');
+    if (!mounted) return;
+    setState(() {
+      _token = prefs.getString('token')?.trim();
+      _loadingToken = false;
+    });
+  }
+
+  Widget _wrap(Widget child) {
+    if (widget.borderRadius != null) {
+      return ClipRRect(borderRadius: widget.borderRadius!, child: child);
+    }
+    return child;
+  }
+
+  Widget _placeholder() {
+    return SizedBox(
+      width: widget.width,
+      height: widget.height,
+      child: Center(child: widget.placeholder ?? const CircularProgressIndicator()),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (imageUrl.trim().isEmpty) {
-      return errorWidget ?? const SizedBox.shrink();
+    if (widget.imageUrl.trim().isEmpty) {
+      return widget.errorWidget ?? const SizedBox.shrink();
     }
 
-    return FutureBuilder<String?>(
-      future: _loadToken(),
-      builder: (context, snapshot) {
-        final token = snapshot.data;
-        Widget child = Image.network(
-          imageUrl,
-          width: width,
-          height: height,
-          fit: fit,
-          headers: token == null || token.isEmpty
-              ? null
-              : {'Authorization': 'Bearer $token'},
-          errorBuilder: (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
-          loadingBuilder: (context, widget, progress) {
-            if (progress == null) return widget;
-            return SizedBox(
-              width: width,
-              height: height,
-              child: Center(child: placeholder ?? const CircularProgressIndicator()),
-            );
-          },
-        );
-        if (borderRadius != null) {
-          child = ClipRRect(borderRadius: borderRadius!, child: child);
-        }
-        return child;
-      },
+    if (_loadingToken) {
+      return _wrap(_placeholder());
+    }
+
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      return widget.errorWidget ?? const SizedBox.shrink();
+    }
+
+    return _wrap(
+      Image.network(
+        widget.imageUrl,
+        key: ValueKey<String>('${widget.imageUrl}::$token'),
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        gaplessPlayback: true,
+        headers: {'Authorization': 'Bearer $token'},
+        errorBuilder: (_, __, ___) => widget.errorWidget ?? const SizedBox.shrink(),
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return _placeholder();
+        },
+      ),
     );
   }
 }
