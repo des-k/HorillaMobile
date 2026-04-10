@@ -2,6 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthenticatedNetworkImage extends StatelessWidget {
+  static String? _cachedToken;
+  static Future<String?>? _tokenFuture;
+
+  static void primeToken(String? token) {
+    final value = token?.trim() ?? '';
+    if (value.isEmpty) return;
+    _cachedToken = value;
+    _tokenFuture = Future<String?>.value(value);
+  }
+
   final String? imageUrl;
   final String? baseUrl;
   final double? width;
@@ -11,6 +21,7 @@ class AuthenticatedNetworkImage extends StatelessWidget {
   final Widget? errorWidget;
   final Widget? placeholder;
   final ImageErrorWidgetBuilder? errorBuilder;
+  final String? authToken;
 
   const AuthenticatedNetworkImage({
     super.key,
@@ -23,11 +34,23 @@ class AuthenticatedNetworkImage extends StatelessWidget {
     this.errorWidget,
     this.placeholder,
     this.errorBuilder,
+    this.authToken,
   });
 
   Future<String?> _loadToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('token');
+    if (_cachedToken != null && _cachedToken!.isNotEmpty) {
+      return _cachedToken;
+    }
+    _tokenFuture ??= SharedPreferences.getInstance().then((prefs) {
+      final token = prefs.getString('token');
+      final normalized = token?.trim() ?? '';
+      if (normalized.isNotEmpty) {
+        _cachedToken = normalized;
+        return normalized;
+      }
+      return token;
+    });
+    return _tokenFuture!;
   }
 
   String? _resolveUrl() {
@@ -48,6 +71,32 @@ class AuthenticatedNetworkImage extends StatelessWidget {
       return errorWidget ?? const SizedBox.shrink();
     }
 
+    final eagerToken = (authToken?.trim().isNotEmpty ?? false) ? authToken!.trim() : _cachedToken;
+    if (eagerToken != null && eagerToken.isNotEmpty) {
+      primeToken(eagerToken);
+      Widget child = Image.network(
+        resolvedUrl,
+        width: width,
+        height: height,
+        fit: fit,
+        gaplessPlayback: true,
+        headers: {'Authorization': 'Bearer $eagerToken'},
+        errorBuilder: errorBuilder ?? (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
+        loadingBuilder: (context, widget, progress) {
+          if (progress == null) return widget;
+          return SizedBox(
+            width: width,
+            height: height,
+            child: Center(child: placeholder ?? const CircularProgressIndicator()),
+          );
+        },
+      );
+      if (borderRadius != null) {
+        child = ClipRRect(borderRadius: borderRadius!, child: child);
+      }
+      return child;
+    }
+
     return FutureBuilder<String?>(
       future: _loadToken(),
       builder: (context, snapshot) {
@@ -59,16 +108,18 @@ class AuthenticatedNetworkImage extends StatelessWidget {
           );
         }
 
-        final token = snapshot.data;
+        final token = snapshot.data?.trim();
         if (token == null || token.isEmpty) {
           return errorWidget ?? const SizedBox.shrink();
         }
+        primeToken(token);
 
         Widget child = Image.network(
           resolvedUrl,
           width: width,
           height: height,
           fit: fit,
+          gaplessPlayback: true,
           headers: {'Authorization': 'Bearer $token'},
           errorBuilder: errorBuilder ?? (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
           loadingBuilder: (context, widget, progress) {

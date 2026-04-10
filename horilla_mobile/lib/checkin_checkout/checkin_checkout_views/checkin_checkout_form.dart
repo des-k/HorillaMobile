@@ -364,11 +364,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
         getBaseUrl(),
         prefetchData(),
         getLoginEmployeeRecord(),
-        refreshAttendanceStatus(),
       ]);
 
       if (!mounted) return;
       setState(() => isLoading = false);
+      unawaited(refreshAttendanceStatus());
     } catch (e) {
       debugPrint('Error initializing data: $e');
       if (!mounted) return;
@@ -386,9 +386,15 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
         : (await SharedPreferences.getInstance()).getString('token');
     if (!mounted) {
       getToken = token ?? '';
+      if (getToken.isNotEmpty) {
+        AuthenticatedNetworkImage.primeToken(getToken);
+      }
       return;
     }
     setState(() => getToken = token ?? '');
+    if (getToken.isNotEmpty) {
+      AuthenticatedNetworkImage.primeToken(getToken);
+    }
   }
 
   Future<void> _openMaps(String? location) async {
@@ -3006,6 +3012,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
                                 child: AuthenticatedNetworkImage(
                                   imageUrl: requestsEmpProfile,
                                   baseUrl: baseUrl,
+                                  authToken: getToken,
                                   fit: BoxFit.cover,
                                   errorWidget: const Icon(Icons.person, color: Colors.grey),
                                 ),

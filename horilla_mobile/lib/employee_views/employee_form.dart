@@ -178,6 +178,9 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     var token = prefs.getString("token");
     setState(() {
       getToken = token ?? '';
+      if (getToken.isNotEmpty) {
+        AuthenticatedNetworkImage.primeToken(getToken);
+      }
     });
   }
 
