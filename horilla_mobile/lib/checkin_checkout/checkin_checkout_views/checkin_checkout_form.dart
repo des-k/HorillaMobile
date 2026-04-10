@@ -2994,50 +2994,14 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Container(
-                      width: 40.0,
-                      height: 40.0,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: Colors.grey, width: 1.0),
-                      ),
-                      child: Stack(
-                        children: [
-                          if (requestsEmpProfile.isNotEmpty)
-                            Positioned.fill(
-                              child: ClipOval(
-                                child: AuthenticatedNetworkImage(
-                                  imageUrl: requestsEmpProfile,
-                                  baseUrl: baseUrl,
-                                  authToken: getToken,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person, color: Colors.grey),
-                                ),
-                              ),
-                            ),
-                          if (requestsEmpProfile.isEmpty)
-                            Positioned.fill(
-                              child: Container(
-                                decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.grey[400]),
-                                child: const Icon(Icons.person),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '$requestsEmpMyFirstName $requestsEmpMyLastName',
-                        style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
+                Padding(
+                  padding: const EdgeInsets.only(left: 12.0),
+                  child: Text(
+                    '$requestsEmpMyFirstName $requestsEmpMyLastName',
+                    style: const TextStyle(fontSize: 16.0, fontWeight: FontWeight.bold),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
 
                 const SizedBox(height: 10),
