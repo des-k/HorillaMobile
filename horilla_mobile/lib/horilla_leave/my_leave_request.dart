@@ -3172,15 +3172,11 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                     Positioned.fill(
                                       child: ClipOval(
                                         child: AuthenticatedNetworkImage(
-imageUrl: record['leave_type_id']
-                                              ['icon'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(
-                                                Icons
-                                                    .calendar_month_outlined,
-                                                color: Colors.grey),
-                                ),
+                                          imageUrl: record['leave_type_id']['icon'],
+                                          baseUrl: baseUrl,
+                                          fit: BoxFit.cover,
+                                          errorWidget: const Icon(Icons.calendar_month_outlined, color: Colors.grey),
+                                        ),
                                       ),
                                     ),
                                   if (record['leave_type_id']['icon'] ==
@@ -3467,12 +3463,10 @@ imageUrl: record['leave_type_id']
                               Positioned.fill(
                                 child: ClipOval(
                                   child: AuthenticatedNetworkImage(
-imageUrl: profile,
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.calendar_month_outlined,
-                                          color: Colors.grey); // Fallback icon
-                                    },
+                                    imageUrl: profile,
+                                    baseUrl: baseUrl,
+                                    fit: BoxFit.cover,
+                                    errorWidget: const Icon(Icons.calendar_month_outlined, color: Colors.grey),
                                   ),
                                 ),
                               ),
@@ -3519,9 +3513,9 @@ imageUrl: profile,
                                     size: 18.0,
                                     color: Colors.blue,
                                   ),
-                                  onPressed: () {
-                                    setState(() async {
-                                      await getCurrentLeaveRequest(recordId);
+                                  onPressed: () async {
+                                    await getCurrentLeaveRequest(recordId);
+                                    setState(() {
                                       isSaveClick = true;
                                       _validateLeaveType = false;
                                       _validateDate = false;
@@ -3530,22 +3524,17 @@ imageUrl: profile,
                                       _validateDescription = false;
                                       _validateEndDate = false;
                                       isAction = false;
-
                                       _errorMessage = null;
                                       leaveDescription.clear();
-                                      startDateInput.text =
-                                          record['start_date'] ?? '';
-                                      endDateInput.text =
-                                          record['end_date'] ?? '';
+                                      startDateInput.text = record['start_date'] ?? '';
+                                      endDateInput.text = record['end_date'] ?? '';
                                       _applyDefaultFullDayBreakdowns();
-
-                                      getAllLeaveTypeName();
-                                      getMyAllLeaveRequest();
-                                      _showUpdateDialog(
-                                          context, record, currentRequests);
-                                    }),
+                                    });
+                                    getAllLeaveTypeName();
+                                    getMyAllLeaveRequest();
+                                    _showUpdateDialog(context, record, currentRequests);
+                                  },
                                 ),
-                              ),
                             ),
                           if (record['status'] == 'requested')
                             Container(
@@ -3892,15 +3881,11 @@ imageUrl: profile,
                                           Positioned.fill(
                                             child: ClipOval(
                                               child: AuthenticatedNetworkImage(
-imageUrl: record['leave_type_id']
-                                                    ['icon'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(
-                                                      Icons
-                                                          .calendar_month_outlined,
-                                                      color: Colors.grey),
-                                ),
+                                                imageUrl: record['leave_type_id']['icon'],
+                                                baseUrl: baseUrl,
+                                                fit: BoxFit.cover,
+                                                errorWidget: const Icon(Icons.calendar_month_outlined, color: Colors.grey),
+                                              ),
                                             ),
                                           ),
                                         if (record['leave_type_id']['icon'] ==

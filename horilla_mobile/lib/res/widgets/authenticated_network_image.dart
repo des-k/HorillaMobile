@@ -10,6 +10,7 @@ class AuthenticatedNetworkImage extends StatelessWidget {
   final BorderRadius? borderRadius;
   final Widget? errorWidget;
   final Widget? placeholder;
+  final ImageErrorWidgetBuilder? errorBuilder;
 
   const AuthenticatedNetworkImage({
     super.key,
@@ -21,6 +22,7 @@ class AuthenticatedNetworkImage extends StatelessWidget {
     this.borderRadius,
     this.errorWidget,
     this.placeholder,
+    this.errorBuilder,
   });
 
   Future<String?> _loadToken() async {
@@ -68,7 +70,7 @@ class AuthenticatedNetworkImage extends StatelessWidget {
           height: height,
           fit: fit,
           headers: {'Authorization': 'Bearer $token'},
-          errorBuilder: (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
+          errorBuilder: errorBuilder ?? (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
           loadingBuilder: (context, widget, progress) {
             if (progress == null) return widget;
             return SizedBox(

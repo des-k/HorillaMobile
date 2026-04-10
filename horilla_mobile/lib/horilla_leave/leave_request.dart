@@ -3530,13 +3530,11 @@ class _LeaveRequest extends State<LeaveRequest>
                                     Positioned.fill(
                                       child: ClipOval(
                                         child: AuthenticatedNetworkImage(
-imageUrl: record['employee_id']
-                                              ['employee_profile'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person,
-                                                color: Colors.grey),
-                                ),
+                                          imageUrl: record['employee_id']['employee_profile'],
+                                          baseUrl: baseUrl,
+                                          fit: BoxFit.cover,
+                                          errorWidget: const Icon(Icons.person, color: Colors.grey),
+                                        ),
                                       ),
                                     ),
                                   if (record['employee_id']
@@ -4140,13 +4138,10 @@ imageUrl: record['employee_id']
                               Positioned.fill(
                                 child: ClipOval(
                                   child: AuthenticatedNetworkImage(
-imageUrl: record['employee_id']
-                                        ['employee_profile'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person,
-                                          color: Colors.grey); // Fallback icon
-                                    },
+                                    imageUrl: record['employee_id']['employee_profile'],
+                                    baseUrl: baseUrl,
+                                    fit: BoxFit.cover,
+                                    errorWidget: const Icon(Icons.person, color: Colors.grey),
                                   ),
                                 ),
                               ),
@@ -4226,9 +4221,8 @@ imageUrl: record['employee_id']
                                   });
                                   getAllEmployeesName();
                                   getAllLeaveTypeName();
-                                  _showUpdateDialog(context, record,
-                                      currentRequests, recordId),
-                                ),
+                                  _showUpdateDialog(context, record, currentRequests, recordId);
+                                },
                             ),
                           ),
                           Container(

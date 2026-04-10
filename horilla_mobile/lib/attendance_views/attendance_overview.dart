@@ -1027,11 +1027,11 @@ Widget buildOfflineEmployeesTile(
                 Positioned.fill(
                   child: ClipOval(
                     child: AuthenticatedNetworkImage(
-imageUrl: record['employee_profile'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person),
-                                ),
+                      imageUrl: record['employee_profile'],
+                      baseUrl: baseUrl,
+                      fit: BoxFit.cover,
+                      errorWidget: const Icon(Icons.person),
+                    ),
                   ),
                 ),
               if (record['employee_profile'] == null ||
@@ -1126,16 +1126,9 @@ void _showEmailDialog(
                         Positioned.fill(
                           child: ClipOval(
                             child: AuthenticatedNetworkImage(
-imageUrl: record['employee_profile'],
-                              // headers: {
-                              //   "Authorization": "Bearer $token",
-                              // },
+                              imageUrl: record['employee_profile'],
                               fit: BoxFit.cover,
-                              errorBuilder: (BuildContext context,
-                                  Object exception, StackTrace? stackTrace) {
-                                return const Icon(Icons.person,
-                                    color: Colors.grey);
-                              },
+                              errorWidget: const Icon(Icons.person, color: Colors.grey),
                             ),
                           ),
                         ),
@@ -1299,398 +1292,47 @@ Future<Map<String, String>> getTemplate() async {
   var typedServerUrl = prefs.getString("typed_url");
 
   var uri = Uri.parse('$typedServerUrl/api/attendance/mail-templates');
-  var response = await http.get(uri,
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(
-                                                        Icons.person,
-                                                        color: Colors.grey),
-                                ),
-                                              ),
-                                            ),
-                                          if (record['employee_profile_url'] ==
-                                              null ||
-                                              record['employee_profile_url']
-                                                  .isEmpty)
-                                            Positioned.fill(
-                                              child: Container(
-                                                decoration: BoxDecoration(
-                                                  shape: BoxShape.circle,
-                                                  color: Colors.grey[400],
-                                                ),
-                                                child: const Icon(Icons.person),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                    SizedBox(
-                                        width:
-                                        MediaQuery.of(context).size.width *
-                                            0.01),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            (record['employee_first_name'] ??
-                                                '') +
-                                                (record['employee_last_name'] ??
-                                                    ''),
-                                            style: const TextStyle(
-                                                fontSize: 15.0,
-                                                fontWeight: FontWeight.bold),
-                                            maxLines: 2,
-                                          ),
-                                          Text(
-                                            record['badge_id'] != null
-                                                ? '(${record['badge_id']})'
-                                                : '',
-                                            style: const TextStyle(
-                                                fontSize: 12.0,
-                                                fontWeight: FontWeight.normal),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        Container(
-                                          decoration: BoxDecoration(
-                                            color: Colors.grey[200],
-                                            borderRadius:
-                                            BorderRadius.circular(4.0),
-                                          ),
-                                        ),
-                                        SizedBox(
-                                            width: MediaQuery.of(context)
-                                                .size
-                                                .width *
-                                                0.008),
-                                        Container(
-                                          decoration: BoxDecoration(
-                                            color: Colors.grey[200],
-                                            borderRadius:
-                                            BorderRadius.circular(4.0),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.03),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Attendance Date',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['attendance_date'] ?? 'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Check In',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['attendance_clock_in'] ??
-                                        'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Check In Date',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['attendance_clock_in_date'] ??
-                                        'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Check Out ',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['attendance_clock_out'] ??
-                                        'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Check Out Date',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['attendance_clock_out_date'] ??
-                                        'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Shift',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['shift_name'] ?? 'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Work Type',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(
-                                      record['work_type'] ?? 'None',
-                                      maxLines: 2,
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'At Work',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['attendance_worked_hour'] ??
-                                        'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Min Hour',
-                                      style: TextStyle(
-                                        color: Colors.grey,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    Text(record['minimum_hour'] ?? 'None'),
-                                  ],
-                                ),
-                                SizedBox(
-                                    height: MediaQuery.of(context).size.height *
-                                        0.01),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.all(8.0),
-                child: Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey[50]!),
-                    borderRadius: BorderRadius.circular(8.0),
-                    color: Colors.white,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.grey.shade400.withOpacity(0.3),
-                        spreadRadius: 2,
-                        blurRadius: 5,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Card(
-                    shape: RoundedRectangleBorder(
-                      side: const BorderSide(color: Colors.white, width: 0.0),
-                      borderRadius: BorderRadius.circular(10.0),
-                    ),
-                    color: Colors.white,
-                    elevation: 0.1,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Container(
-                                width: 35.0,
-                                height: 35.0,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: Colors.grey, width: 1.0),
-                                ),
-                                child: Stack(
-                                  children: [
-                                    if (record['employee_profile_url'] !=
-                                        null &&
-                                        record['employee_profile_url']
-                                            .isNotEmpty)
-                                      Positioned.fill(
-                                        child: ClipOval(
-                                          child: AuthenticatedNetworkImage(
-imageUrl: record['employee_profile_url'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person,
-                                                  color: Colors.grey),
-                                ),
-                                        ),
-                                      ),
-                                    if (record['employee_profile_url'] ==
-                                        null ||
-                                        record['employee_profile_url'].isEmpty)
-                                      Positioned.fill(
-                                        child: Container(
-                                          decoration: BoxDecoration(
-                                            shape: BoxShape.circle,
-                                            color: Colors.grey[400],
-                                          ),
-                                          child: const Icon(Icons.person),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              SizedBox(
-                                  width:
-                                  MediaQuery.of(context).size.width * 0.01),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      (record['employee_first_name'] ?? '') +
-                                          (record['employee_last_name'] ?? ''),
-                                      style: const TextStyle(
-                                          fontSize: 15.0,
-                                          fontWeight: FontWeight.bold),
-                                      maxLines: 2,
-                                    ),
-                                    Text(
-                                      record['badge_id'] != null
-                                          ? '(${record['badge_id']})'
-                                          : '',
-                                      style: const TextStyle(
-                                          fontSize: 12.0,
-                                          fontWeight: FontWeight.normal),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.005),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text('Date'),
-                              Text('${record['attendance_date']}'),
-                            ],
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text('Check-In'),
-                              Text('${record['attendance_clock_in_date']}'),
-                            ],
-                          ),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              const Text('Check-Out'),
-                              Text('${record['attendance_clock_out_date']}'),
-                            ],
-                          ),
-                          SizedBox(
-                              height:
-                              MediaQuery.of(context).size.height * 0.02),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    ),
+  var response = await http.get(uri, headers: {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer $token",
+  });
+
+  if (response.statusCode == 200) {
+    final decoded = jsonDecode(response.body);
+    if (decoded is Map<String, dynamic>) {
+      return decoded.map((key, value) => MapEntry(key.toString(), value.toString()));
+    }
+  }
+  return <String, String>{};
+}
+
+Future<void> sendEmail(String employeeId, String subject, String bodyContent) async {
+  final prefs = await SharedPreferences.getInstance();
+  final token = prefs.getString("token");
+  final typedServerUrl = prefs.getString("typed_url");
+
+  final uri = Uri.parse('$typedServerUrl/api/attendance/send-mail');
+  final request = http.MultipartRequest('POST', uri);
+  request.headers.addAll({
+    "Authorization": "Bearer $token",
+  });
+  request.fields['employee_id'] = employeeId;
+  request.fields['subject'] = subject;
+  request.fields['body'] = bodyContent;
+  await request.send();
+}
+
+Widget buildOvertimeValidate(
+  List<Map<String, dynamic>> requestsOvertimeValidate,
+  baseUrl,
+  scrollController,
+  token,
+) {
+  return buildNonValidatedAttendance(
+    requestsOvertimeValidate,
+    baseUrl,
+    token,
+    scrollController,
   );
 }
 
@@ -1758,14 +1400,11 @@ Widget buildNonValidatedAttendance(
                                             Positioned.fill(
                                               child: ClipOval(
                                                 child: AuthenticatedNetworkImage(
-imageUrl: record[
-                                                      'employee_profile_url'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(
-                                                        Icons.person,
-                                                        color: Colors.grey),
-                                ),
+                                                  imageUrl: record['employee_profile_url'],
+                                                  baseUrl: baseUrl,
+                                                  fit: BoxFit.cover,
+                                                  errorWidget: const Icon(Icons.person, color: Colors.grey),
+                                                ),
                                               ),
                                             ),
                                           if (record['employee_profile_url'] ==
@@ -2059,12 +1698,11 @@ imageUrl: record[
                                       Positioned.fill(
                                         child: ClipOval(
                                           child: AuthenticatedNetworkImage(
-imageUrl: record['employee_profile_url'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person,
-                                                  color: Colors.grey),
-                                ),
+                                            imageUrl: record['employee_profile_url'],
+                                            baseUrl: baseUrl,
+                                            fit: BoxFit.cover,
+                                            errorWidget: const Icon(Icons.person, color: Colors.grey),
+                                          ),
                                         ),
                                       ),
                                     if (record['employee_profile_url'] ==
