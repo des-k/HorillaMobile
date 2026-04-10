@@ -158,7 +158,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   XFile? pickedFile;
   late String getToken = '';
 
-
   @override
   void initState() {
     super.initState();
@@ -170,7 +169,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       getEmployeeDetails();
       getBaseUrl();
       _loadEmployeeData();
-      _simulateLoading();
       fetchToken();
     });
   }
@@ -212,7 +210,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       baseUrl = typedServerUrl ?? '';
     });
   }
-
 
   Future<void> _ensureEmployeeSelectorLoaded() async {
     if (_employeeSelectorLoaded) {
@@ -263,7 +260,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     ]);
     _workInfoEditLookupsLoaded = true;
   }
-
 
   String _absoluteMediaUrl(String raw) {
     final value = raw.trim();

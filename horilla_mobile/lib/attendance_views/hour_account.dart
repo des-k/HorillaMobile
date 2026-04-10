@@ -112,7 +112,6 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
   late String getToken = '';
   String? _permissionStatusMessage;
 
-
   @override
   void initState() {
     super.initState();
@@ -124,7 +123,6 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
     prefetchData();
     getBaseUrl();
     fetchToken();
-    _simulateLoading();
     loadPermissionsFromStorage();
   }
 
@@ -147,7 +145,6 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
       _permissionsLoaded = true;
     });
   }
-
 
   Future<void> _simulateLoading() async {
     await Future.delayed(const Duration(seconds: 5));
@@ -197,7 +194,6 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
       _permissionsLoaded = true;
     });
   }
-
 
   @override
   void dispose() {

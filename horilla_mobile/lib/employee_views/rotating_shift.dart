@@ -109,7 +109,6 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
   int? selectedEmployerId;
   late String getToken = '';
 
-
   @override
   void initState() {
     super.initState();
@@ -122,7 +121,6 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
       getEmployees();
       getBaseUrl();
       fetchToken();
-      _simulateLoading();
       getEmployeeDetails();
       getRotatingShift();
     });

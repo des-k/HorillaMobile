@@ -44,7 +44,6 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
   @override
   void initState() {
     super.initState();
-    _simulateLoading();
     _scrollController.addListener(_scrollListener);
     prefetchData();
     getEmployeeDetails();
@@ -123,13 +122,6 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
         'employee_profile': responseData['employee_profile']
       };
     }
-  }
-
-  Future<void> _simulateLoading() async {
-    await Future.delayed(const Duration(seconds: 2));
-    setState(() {
-      _isShimmer = false;
-    });
   }
 
   Future<void> getEmployeeDetails() async {

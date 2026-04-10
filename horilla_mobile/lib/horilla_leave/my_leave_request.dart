@@ -127,7 +127,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   bool hasMore = true;
   late String getToken = '';
 
-
   String _getBreakdown(String breakdownValue) {
     final breakdownMap = {
       'full_day': 'Full Day',
@@ -247,7 +246,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
   TextEditingController endDateSelect = TextEditingController();
   final TextEditingController _fileNameController = TextEditingController();
 
-
   @override
   void initState() {
     super.initState();
@@ -261,7 +259,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     startBreakdown.clear();
     getMyLeaveRequest();
     getRequestedCount();
-    _simulateLoading();
     getApprovedCount();
     getCancelledCount();
     getRejectedCount();
@@ -288,14 +285,6 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     var token = prefs.getString("token");
     setState(() {
       getToken = token ?? '';
-    });
-  }
-
-
-  Future<void> _simulateLoading() async {
-    await Future.delayed(const Duration(seconds: 5));
-    setState(() {
-      _isShimmer = false;
     });
   }
 
@@ -4126,7 +4115,6 @@ StateInfo _getStateInfo(String state) {
 class ImageViewer extends StatelessWidget {
   final String imagePath;
   final String token;
-
 
   const ImageViewer({super.key, required this.imagePath, required this.token});
 

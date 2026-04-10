@@ -89,7 +89,6 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
   late String baseUrl = '';
   late String getToken = '';
 
-
   @override
   void initState() {
     super.initState();
@@ -104,9 +103,7 @@ class _RotatingWorkTypePageState extends State<RotatingWorkTypePage> {
       getWorkType();
       getBaseUrl();
       fetchToken();
-      _simulateLoading();
       getRotatingWorkType();
-      _simulateLoading();
     });
   }
 

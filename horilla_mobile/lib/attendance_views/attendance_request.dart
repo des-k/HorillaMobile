@@ -144,7 +144,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
   bool _isPermissionCheckComplete = false;
   late String getToken = '';
 
-
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
@@ -190,13 +189,11 @@ class _AttendanceRequest extends State<AttendanceRequest>
     getShiftDetails();
     getShiftScheduleRanges();
     getWorkTypeDetails();
-    _simulateLoading();
     loadPermissionsFromStorage();
     fetchToken();
     loadCurrentEmployeeId();
     permissionChecks();
   }
-
 
   Future<void> prefetchWorkTypeRequestCounts() async {
     try {
@@ -1232,7 +1229,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
     return null;
   }
 
-
   Widget _kvBlock(String k, String v, {double bottom = 10}) {
     return Padding(
       padding: EdgeInsets.only(bottom: bottom),
@@ -1296,7 +1292,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
       );
     }
   }
-
 
   Future<void> _openEmployeePickerBottomSheet(
       BuildContext dialogContext,
@@ -1404,8 +1399,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
       _validateEmployee = false;
     });
   }
-
-
 
   void _setCreateEmployeeToSelf() {
     final rawId = arguments['employee_id'];
@@ -1931,7 +1924,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
                               return;
                             }
 
-
                             // Work Type is not required for Attendance Correction Request.
                             if (needsIn && checkInHoursController.text.isEmpty) {
                               setState(() {
@@ -2176,7 +2168,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
       _attendanceDateServerError = dateErr;
     });
   }
-
 
   Future<void> updateAttendanceRequest(int requestId, Map<String, dynamic> createdDetails) async {
     final prefs = await SharedPreferences.getInstance();
@@ -2582,7 +2573,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
       _setCreateEmployeeToSelf();
     }
   }
-
 
   Future<void> getAllRequestedAttendances({bool reset = false}) async {
     final prefs = await SharedPreferences.getInstance();
@@ -3348,8 +3338,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
     );
   }
 
-
-
   String? _normalizeEmployeeIdValue(dynamic raw) {
     if (raw == null) return null;
     if (raw is Map) {
@@ -3814,7 +3802,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
     return _cleanValue(v);
   }
 
-
   Map<String, dynamic> _parseRequestedData(Map<String, dynamic> record) {
     // Cleanup stage 2: attendance correction requests should rely on explicit
     // request entity fields from the API, not legacy requested_data payloads.
@@ -3901,7 +3888,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
     if (sid == null) return null;
     return shiftFlexiMinutesById[sid];
   }
-
 
   String _scopeLabel(String? checkIn, String? checkOut) {
     final hasIn = checkIn != null && checkIn.isNotEmpty;
@@ -4027,7 +4013,6 @@ class _AttendanceRequest extends State<AttendanceRequest>
       return raw;
     }
   }
-
 
   Widget buildRequestedAttendanceContent(
       List<Map<String, dynamic>> records, scrollController, searchText) {

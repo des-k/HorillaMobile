@@ -109,8 +109,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
   bool isCreateButtonVisible = true;
   late String getToken = '';
 
-
-
   @override
   void initState() {
     super.initState();
@@ -125,9 +123,7 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
       getWorkType();
       getBaseUrl();
       fetchToken();
-      _simulateLoading();
       getRequestingShift();
-      _simulateLoading();
       createVisibility();
     });
   }
@@ -168,7 +164,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
       });
     }
   }
-
 
   void permissionChecks() async {
     final prefs = await SharedPreferences.getInstance();
@@ -263,7 +258,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
     }
   }
 
-
   Future<void> getEmployees() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
@@ -308,7 +302,6 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
       });
     }
   }
-
 
   Future<void> getEmployeeDetails() async {
     employeeId = widget.selectedEmployerId;

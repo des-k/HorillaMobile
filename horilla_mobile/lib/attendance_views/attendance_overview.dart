@@ -72,7 +72,6 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
     getAllOvertimeValidateEmployees();
     getAllNonValidatedAttendance();
     getBaseUrl();
-    _simulateLoading();
     loadPermissionsFromStorage();
     fetchToken();
   }
@@ -145,7 +144,6 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
       }
     });
   }
-
 
   void prefetchData() async {
     final prefs = await SharedPreferences.getInstance();
