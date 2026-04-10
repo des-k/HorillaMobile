@@ -4157,11 +4157,16 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                   Positioned.fill(
                                     child: ClipOval(
                                       child: AuthenticatedNetworkImage(
-imageUrl: employeeDetails['employee_profile'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person),
-                                ),
+                                        imageUrl: employeeDetails['employee_profile'],
+                                        baseUrl: baseUrl,
+                                        fit: BoxFit.cover,
+                                        cacheKey: employeeDetails['id'] != null
+                                            ? 'employee_profile_${employeeDetails['id']}'
+                                            : null,
+                                        cacheVersion: (employeeDetails['employee_profile_version'] ?? '')
+                                            .toString(),
+                                        errorWidget: const Icon(Icons.person),
+                                      ),
                                     ),
                                   ),
                                 if (employeeDetails['employee_profile'] ==
@@ -5171,6 +5176,11 @@ imageUrl: employeeDetails['employee_profile'],
                                           width: 120,
                                           height: 120,
                                           fit: BoxFit.cover,
+                                          cacheKey: employeeDetails['id'] != null
+                                              ? 'employee_face_${employeeDetails['id']}'
+                                              : null,
+                                          cacheVersion: (wfhProfile['face_image_version'] ?? '')
+                                              .toString(),
                                           borderRadius: BorderRadius.circular(8),
                                           errorWidget: const Text('-'),
                                         )

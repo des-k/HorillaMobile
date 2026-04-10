@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-class AuthenticatedNetworkImage extends StatelessWidget {
+import '../utilities/private_image_cache.dart';
+
+class AuthenticatedNetworkImage extends StatefulWidget {
   static String? _cachedToken;
   static Future<String?>? _tokenFuture;
 
@@ -22,6 +26,8 @@ class AuthenticatedNetworkImage extends StatelessWidget {
   final Widget? placeholder;
   final ImageErrorWidgetBuilder? errorBuilder;
   final String? authToken;
+  final String? cacheKey;
+  final String? cacheVersion;
 
   const AuthenticatedNetworkImage({
     super.key,
@@ -35,106 +41,183 @@ class AuthenticatedNetworkImage extends StatelessWidget {
     this.placeholder,
     this.errorBuilder,
     this.authToken,
+    this.cacheKey,
+    this.cacheVersion,
   });
 
-  Future<String?> _loadToken() async {
-    if (_cachedToken != null && _cachedToken!.isNotEmpty) {
-      return _cachedToken;
+  @override
+  State<AuthenticatedNetworkImage> createState() => _AuthenticatedNetworkImageState();
+}
+
+class _ResolvedAuthenticatedImage {
+  final File? file;
+  final String? url;
+  final String? token;
+
+  const _ResolvedAuthenticatedImage({this.file, this.url, this.token});
+}
+
+class _AuthenticatedNetworkImageState extends State<AuthenticatedNetworkImage> {
+  Future<_ResolvedAuthenticatedImage?>? _imageFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _imageFuture = _resolveImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant AuthenticatedNetworkImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.imageUrl != widget.imageUrl ||
+        oldWidget.baseUrl != widget.baseUrl ||
+        oldWidget.authToken != widget.authToken ||
+        oldWidget.cacheKey != widget.cacheKey ||
+        oldWidget.cacheVersion != widget.cacheVersion ||
+        oldWidget.width != widget.width ||
+        oldWidget.height != widget.height ||
+        oldWidget.fit != widget.fit) {
+      _imageFuture = _resolveImage();
     }
-    _tokenFuture ??= SharedPreferences.getInstance().then((prefs) {
+  }
+
+  Future<String?> _loadToken() async {
+    if (AuthenticatedNetworkImage._cachedToken != null &&
+        AuthenticatedNetworkImage._cachedToken!.isNotEmpty) {
+      return AuthenticatedNetworkImage._cachedToken;
+    }
+    AuthenticatedNetworkImage._tokenFuture ??=
+        SharedPreferences.getInstance().then((prefs) {
       final token = prefs.getString('token');
       final normalized = token?.trim() ?? '';
       if (normalized.isNotEmpty) {
-        _cachedToken = normalized;
+        AuthenticatedNetworkImage._cachedToken = normalized;
         return normalized;
       }
       return token;
     });
-    return _tokenFuture!;
+    return AuthenticatedNetworkImage._tokenFuture!;
   }
 
   String? _resolveUrl() {
-    final raw = imageUrl?.trim() ?? '';
+    final raw = widget.imageUrl?.trim() ?? '';
     if (raw.isEmpty) return null;
     if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
-    final base = (baseUrl ?? '').trim();
+    final base = (widget.baseUrl ?? '').trim();
     if (base.isEmpty) return raw;
     final normalizedBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
     final normalizedRaw = raw.startsWith('/') ? raw : '/$raw';
     return '$normalizedBase$normalizedRaw';
   }
 
+  bool get _canUseDiskCache {
+    final cacheKey = widget.cacheKey?.trim() ?? '';
+    final cacheVersion = widget.cacheVersion?.trim() ?? '';
+    return cacheKey.isNotEmpty && cacheVersion.isNotEmpty;
+  }
+
+  Future<_ResolvedAuthenticatedImage?> _resolveImage() async {
+    final resolvedUrl = _resolveUrl();
+    if (resolvedUrl == null || resolvedUrl.isEmpty) {
+      return null;
+    }
+
+    final eagerToken = (widget.authToken?.trim().isNotEmpty ?? false)
+        ? widget.authToken!.trim()
+        : AuthenticatedNetworkImage._cachedToken;
+    final token = eagerToken?.isNotEmpty == true ? eagerToken : await _loadToken();
+    final normalizedToken = token?.trim() ?? '';
+    if (normalizedToken.isEmpty) {
+      return _ResolvedAuthenticatedImage(url: resolvedUrl, token: null);
+    }
+
+    AuthenticatedNetworkImage.primeToken(normalizedToken);
+
+    if (_canUseDiskCache) {
+      final file = await PrivateImageCacheService.getOrFetch(
+        cacheKey: widget.cacheKey!.trim(),
+        imageUrl: resolvedUrl,
+        version: widget.cacheVersion!.trim(),
+        token: normalizedToken,
+      );
+      if (file != null) {
+        return _ResolvedAuthenticatedImage(file: file, url: resolvedUrl, token: normalizedToken);
+      }
+    }
+
+    return _ResolvedAuthenticatedImage(url: resolvedUrl, token: normalizedToken);
+  }
+
+  Widget _wrap(Widget child) {
+    if (widget.borderRadius != null) {
+      return ClipRRect(borderRadius: widget.borderRadius!, child: child);
+    }
+    return child;
+  }
+
+  Widget _buildNetworkImage(String resolvedUrl, String token) {
+    return _wrap(
+      Image.network(
+        resolvedUrl,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        gaplessPlayback: true,
+        headers: <String, String>{'Authorization': 'Bearer $token'},
+        errorBuilder: widget.errorBuilder ?? (_, __, ___) => widget.errorWidget ?? const SizedBox.shrink(),
+        loadingBuilder: (context, child, progress) {
+          if (progress == null) return child;
+          return SizedBox(
+            width: widget.width,
+            height: widget.height,
+            child: Center(child: widget.placeholder ?? const CircularProgressIndicator()),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFileImage(File file) {
+    return _wrap(
+      Image.file(
+        file,
+        width: widget.width,
+        height: widget.height,
+        fit: widget.fit,
+        gaplessPlayback: true,
+        errorBuilder: widget.errorBuilder ?? (_, __, ___) => widget.errorWidget ?? const SizedBox.shrink(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final resolvedUrl = _resolveUrl();
     if (resolvedUrl == null || resolvedUrl.isEmpty) {
-      return errorWidget ?? const SizedBox.shrink();
+      return widget.errorWidget ?? const SizedBox.shrink();
     }
 
-    final eagerToken = (authToken?.trim().isNotEmpty ?? false) ? authToken!.trim() : _cachedToken;
-    if (eagerToken != null && eagerToken.isNotEmpty) {
-      primeToken(eagerToken);
-      Widget child = Image.network(
-        resolvedUrl,
-        width: width,
-        height: height,
-        fit: fit,
-        gaplessPlayback: true,
-        headers: {'Authorization': 'Bearer $eagerToken'},
-        errorBuilder: errorBuilder ?? (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
-        loadingBuilder: (context, widget, progress) {
-          if (progress == null) return widget;
-          return SizedBox(
-            width: width,
-            height: height,
-            child: Center(child: placeholder ?? const CircularProgressIndicator()),
-          );
-        },
-      );
-      if (borderRadius != null) {
-        child = ClipRRect(borderRadius: borderRadius!, child: child);
-      }
-      return child;
-    }
-
-    return FutureBuilder<String?>(
-      future: _loadToken(),
+    return FutureBuilder<_ResolvedAuthenticatedImage?>(
+      future: _imageFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return SizedBox(
-            width: width,
-            height: height,
-            child: Center(child: placeholder ?? const CircularProgressIndicator()),
+            width: widget.width,
+            height: widget.height,
+            child: Center(child: widget.placeholder ?? const CircularProgressIndicator()),
           );
         }
 
-        final token = snapshot.data?.trim();
-        if (token == null || token.isEmpty) {
-          return errorWidget ?? const SizedBox.shrink();
+        final data = snapshot.data;
+        if (data?.file != null) {
+          return _buildFileImage(data!.file!);
         }
-        primeToken(token);
 
-        Widget child = Image.network(
-          resolvedUrl,
-          width: width,
-          height: height,
-          fit: fit,
-          gaplessPlayback: true,
-          headers: {'Authorization': 'Bearer $token'},
-          errorBuilder: errorBuilder ?? (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
-          loadingBuilder: (context, widget, progress) {
-            if (progress == null) return widget;
-            return SizedBox(
-              width: width,
-              height: height,
-              child: Center(child: placeholder ?? const CircularProgressIndicator()),
-            );
-          },
-        );
-        if (borderRadius != null) {
-          child = ClipRRect(borderRadius: borderRadius!, child: child);
+        final token = data?.token?.trim() ?? '';
+        if (token.isEmpty) {
+          return widget.errorWidget ?? const SizedBox.shrink();
         }
-        return child;
+        return _buildNetworkImage(data?.url ?? resolvedUrl, token);
       },
     );
   }
