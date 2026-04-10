@@ -292,11 +292,15 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
     if (response.statusCode == 200) {
       final responseData = jsonDecode(response.body);
+      final firstName = responseData['employee_first_name']?.toString().trim() ?? '';
+      final lastName = responseData['employee_last_name']?.toString().trim() ?? '';
+      final employeeName = [firstName, lastName]
+          .where((part) => part.isNotEmpty)
+          .join(' ');
+
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': employeeName,
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -331,16 +335,17 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       "Authorization": "Bearer $token",
     });
     if (response.statusCode == 200) {
+      final decoded = jsonDecode(response.body);
+      if (!mounted) return;
       setState(() {
-        employeeDetails = jsonDecode(response.body);
-        getEmployeeWorkInformation();
-        getEmployeeBankInformation();
-        _loadEmployeeData().then((_) {
-          initializeController();
-        });
-        setState(() {
-          isLoading = false;
-        });
+        employeeDetails = decoded;
+        isLoading = false;
+      });
+      getEmployeeWorkInformation();
+      getEmployeeBankInformation();
+      _loadEmployeeData().then((_) {
+        if (!mounted) return;
+        initializeController();
       });
     }
   }
@@ -484,7 +489,15 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    employeeWorkInfoId = employeeDetails['employee_work_info_id'];
+    employeeWorkInfoId = employeeDetails['employee_work_info_id']?.toString() ?? '';
+    if (employeeWorkInfoId.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        employeeWorkInfoRecord = {};
+        jobRuleName = '';
+      });
+      return;
+    }
     var uri = Uri.parse(
         '$typedServerUrl/api/employee/employee-work-information/$employeeWorkInfoId/');
     var response = await http.get(uri, headers: {
@@ -492,6 +505,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       "Authorization": "Bearer $token",
     });
     if (response.statusCode == 200) {
+      if (!mounted) return;
       setState(() {
         employeeWorkInfoRecord = jsonDecode(response.body);
         jobRuleName = employeeWorkInfoRecord['job_role_name']?.toString() ?? '';
@@ -668,7 +682,14 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    employeeBankDetailsId = employeeDetails['employee_bank_details_id'];
+    employeeBankDetailsId = employeeDetails['employee_bank_details_id']?.toString() ?? '';
+    if (employeeBankDetailsId.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        employeeBankRecord = {};
+      });
+      return;
+    }
     var uri = Uri.parse(
         '$typedServerUrl/api/employee/employee-bank-details/$employeeBankDetailsId/');
     var response = await http.get(uri, headers: {
@@ -676,6 +697,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       "Authorization": "Bearer $token",
     });
     if (response.statusCode == 200) {
+      if (!mounted) return;
       setState(() {
         employeeBankRecord = jsonDecode(response.body);
       });
@@ -3560,17 +3582,20 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
             switch (index) {
               case 0:
                 Future.delayed(const Duration(milliseconds: 1000), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/home');
                 });
                 break;
               case 1:
                 Future.delayed(const Duration(milliseconds: 1000), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(
                       context, '/employee_checkin_checkout');
                 });
                 break;
               case 2:
                 Future.delayed(const Duration(milliseconds: 1000), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/employees_form',
                       arguments: arguments);
                 });

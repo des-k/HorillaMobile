@@ -3285,16 +3285,19 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
             switch (index) {
               case 0:
                 Future.delayed(const Duration(milliseconds: 300), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/home');
                 });
                 break;
               case 1:
                 Future.delayed(const Duration(milliseconds: 300), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/employee_checkin_checkout');
                 });
                 break;
               case 2:
                 Future.delayed(const Duration(milliseconds: 300), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/employees_form', arguments: arguments);
                 });
                 break;

@@ -1050,16 +1050,19 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
             switch (index) {
               case 0:
                 Future.delayed(const Duration(milliseconds: 1000), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/home');
                 });
                 break;
               case 1:
                 Future.delayed(const Duration(milliseconds: 1000), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/employee_checkin_checkout');
                 });
                 break;
               case 2:
                 Future.delayed(const Duration(milliseconds: 1000), () {
+                  if (!mounted) return;
                   Navigator.pushReplacementNamed(context, '/employees_form',
                       arguments: arguments);
                 });
