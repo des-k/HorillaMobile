@@ -3535,6 +3535,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
                                     _showUpdateDialog(context, record, currentRequests);
                                   },
                                 ),
+                              ),
                             ),
                           if (record['status'] == 'requested')
                             Container(

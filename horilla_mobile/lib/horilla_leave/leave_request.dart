@@ -4225,6 +4225,7 @@ class _LeaveRequest extends State<LeaveRequest>
                                 },
                             ),
                           ),
+                        ),
                           Container(
                             decoration: BoxDecoration(
                               borderRadius: const BorderRadius.only(
