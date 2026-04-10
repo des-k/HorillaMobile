@@ -8,6 +8,7 @@ import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:intl/intl.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:horilla/res/utilities/private_image_cache.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class EmployeeFormPage extends StatefulWidget {
@@ -182,6 +183,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
         AuthenticatedNetworkImage.primeToken(getToken);
       }
     });
+    _scheduleEmployeeImageWarmup();
   }
 
   Future<void> _simulateLoading() async {
@@ -212,6 +214,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     setState(() {
       baseUrl = typedServerUrl ?? '';
     });
+    _scheduleEmployeeImageWarmup();
   }
 
   Future<void> _ensureEmployeeSelectorLoaded() async {
@@ -271,6 +274,83 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     if (baseUrl.trim().isEmpty) return value;
     if (value.startsWith('/')) return '${baseUrl.trim()}$value';
     return '${baseUrl.trim()}/$value';
+  }
+
+  String _absoluteMediaUrlWhenReady(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return '';
+    if (value.startsWith('http://') || value.startsWith('https://')) return value;
+    final normalizedBase = baseUrl.trim();
+    if (normalizedBase.isEmpty) return '';
+    if (value.startsWith('/')) return '$normalizedBase$value';
+    return '$normalizedBase/$value';
+  }
+
+  String _employeeProfileImageUrl() {
+    return _absoluteMediaUrlWhenReady((employeeDetails['employee_profile'] ?? '').toString());
+  }
+
+  String _employeeProfileCacheVersion() {
+    return (employeeDetails['employee_profile_version'] ?? '').toString().trim();
+  }
+
+  String? _employeeProfileCacheKey() {
+    final id = employeeDetails['id'];
+    if (id == null) return null;
+    final normalizedId = id.toString().trim();
+    if (normalizedId.isEmpty) return null;
+    return 'employee_profile_$normalizedId';
+  }
+
+  String _employeeFaceImageUrl() {
+    final dynamic profile = employeeDetails['wfh_profile'];
+    if (profile is! Map) return '';
+    return _absoluteMediaUrlWhenReady((profile['face_image'] ?? '').toString());
+  }
+
+  String _employeeFaceCacheVersion() {
+    final dynamic profile = employeeDetails['wfh_profile'];
+    if (profile is! Map) return '';
+    return (profile['face_image_version'] ?? '').toString().trim();
+  }
+
+  Future<void> _warmPrivateImageCache({
+    required String imageUrl,
+    required String? cacheKey,
+    required String cacheVersion,
+  }) async {
+    final token = getToken.trim();
+    final normalizedKey = cacheKey?.trim() ?? '';
+    if (imageUrl.isEmpty ||
+        normalizedKey.isEmpty ||
+        cacheVersion.isEmpty ||
+        token.isEmpty) {
+      return;
+    }
+
+    await PrivateImageCacheService.getOrFetch(
+      cacheKey: normalizedKey,
+      imageUrl: imageUrl,
+      version: cacheVersion,
+      token: token,
+    );
+  }
+
+  void _scheduleEmployeeImageWarmup() {
+    Future.microtask(() async {
+      await _warmPrivateImageCache(
+        imageUrl: _employeeProfileImageUrl(),
+        cacheKey: _employeeProfileCacheKey(),
+        cacheVersion: _employeeProfileCacheVersion(),
+      );
+      await _warmPrivateImageCache(
+        imageUrl: _employeeFaceImageUrl(),
+        cacheKey: _employeeProfileCacheKey() == null
+            ? null
+            : 'employee_face_${employeeDetails['id']}',
+        cacheVersion: _employeeFaceCacheVersion(),
+      );
+    });
   }
 
   bool _hasHomeCoordinates(Map<String, dynamic> wfhProfile) {
@@ -338,9 +418,10 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       final decoded = jsonDecode(response.body);
       if (!mounted) return;
       setState(() {
-        employeeDetails = decoded;
+        employeeDetails = Map<String, dynamic>.from(decoded);
         isLoading = false;
       });
+      _scheduleEmployeeImageWarmup();
       getEmployeeWorkInformation();
       getEmployeeBankInformation();
       _loadEmployeeData().then((_) {
@@ -4150,37 +4231,48 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                             backgroundColor: Colors.transparent,
                             child: Stack(
                               children: [
-                                if (employeeDetails['employee_profile'] !=
-                                    null &&
-                                    employeeDetails['employee_profile']
-                                        .isNotEmpty)
-                                  Positioned.fill(
-                                    child: ClipOval(
-                                      child: AuthenticatedNetworkImage(
-                                        imageUrl: employeeDetails['employee_profile'],
-                                        baseUrl: baseUrl,
-                                        fit: BoxFit.cover,
-                                        cacheKey: employeeDetails['id'] != null
-                                            ? 'employee_profile_${employeeDetails['id']}'
-                                            : null,
-                                        cacheVersion: (employeeDetails['employee_profile_version'] ?? '')
-                                            .toString(),
-                                        errorWidget: const Icon(Icons.person),
+                                Builder(
+                                  builder: (context) {
+                                    final profileImageUrl = _employeeProfileImageUrl();
+                                    final profileCacheKey = _employeeProfileCacheKey();
+                                    final profileCacheVersion = _employeeProfileCacheVersion();
+                                    final hasProfileImage = profileImageUrl.isNotEmpty;
+
+                                    if (!hasProfileImage) {
+                                      return Positioned.fill(
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: Colors.grey[400],
+                                          ),
+                                          child: const Icon(Icons.person),
+                                        ),
+                                      );
+                                    }
+
+                                    return Positioned.fill(
+                                      child: ClipOval(
+                                        child: AuthenticatedNetworkImage(
+                                          imageUrl: profileImageUrl,
+                                          authToken: getToken,
+                                          fit: BoxFit.cover,
+                                          cacheKey: profileCacheKey,
+                                          cacheVersion: profileCacheVersion,
+                                          placeholder: Container(
+                                            color: Colors.grey[300],
+                                            alignment: Alignment.center,
+                                            child: const Icon(Icons.person),
+                                          ),
+                                          errorWidget: Container(
+                                            color: Colors.grey[400],
+                                            alignment: Alignment.center,
+                                            child: const Icon(Icons.person),
+                                          ),
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                if (employeeDetails['employee_profile'] ==
-                                    null ||
-                                    employeeDetails['employee_profile'].isEmpty)
-                                  Positioned.fill(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.grey[400],
-                                      ),
-                                      child: const Icon(Icons.person),
-                                    ),
-                                  ),
+                                    );
+                                  },
+                                ),
                                 Positioned(
                                   bottom: 0,
                                   right: 0,
@@ -5173,6 +5265,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                       if (faceImage.isNotEmpty)
                                         AuthenticatedNetworkImage(
                                           imageUrl: faceImage,
+                                          authToken: getToken,
                                           width: 120,
                                           height: 120,
                                           fit: BoxFit.cover,
