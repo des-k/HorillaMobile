@@ -153,6 +153,8 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   bool isAction = false;
   bool checkFile = false;
   bool isLoadingImage = false;
+  bool _workInfoEditLookupsLoaded = false;
+  bool _employeeSelectorLoaded = false;
   XFile? pickedFile;
   late String getToken = '';
 
@@ -168,16 +170,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       getEmployeeDetails();
       getBaseUrl();
       _loadEmployeeData();
-      getEmployees();
-      getWorkType();
-      getRotatingWorkType();
-      getRotatingShift();
-      getRequestingShift();
-      getEmployeeJobPosition();
-      getEmployeeJobDepartment();
-      getReportingManager();
-      getCompanies();
-      getEmployeeType();
       _simulateLoading();
       fetchToken();
     });
@@ -219,6 +211,57 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     setState(() {
       baseUrl = typedServerUrl ?? '';
     });
+  }
+
+
+  Future<void> _ensureEmployeeSelectorLoaded() async {
+    if (_employeeSelectorLoaded) {
+      return;
+    }
+    employeeItems.clear();
+    employeeIdMap.clear();
+    reportingManagerRecord.clear();
+    managerIdMap.clear();
+    await getEmployees();
+    _employeeSelectorLoaded = true;
+  }
+
+  Future<void> _ensureWorkInfoEditLookupsLoaded() async {
+    if (_workInfoEditLookupsLoaded) {
+      return;
+    }
+    workTypeItems.clear();
+    workTypeIdMap.clear();
+    requestedWorkTypeItems.clear();
+    requestedWorkTypeIdMap.clear();
+    rotateShiftItems.clear();
+    rotateShiftIdMap.clear();
+    shiftDetails.clear();
+    shiftIdMap.clear();
+    employeeJobPositionRecord.clear();
+    positionIdMap.clear();
+    employeeJobDepartmentRecord.clear();
+    departmentIdMap.clear();
+    employeeTypeRecord.clear();
+    employeeTypeIdMap.clear();
+    companyRecord.clear();
+    companyIdMap.clear();
+    jobRuleItems.clear();
+    jobRuleIdMap.clear();
+
+    await Future.wait([
+      getWorkType(),
+      getRotatingWorkType(),
+      getRotatingShift(),
+      getRequestingShift(),
+      getEmployeeJobPosition(),
+      getEmployeeJobDepartment(),
+      getEmployeeType(),
+      getCompanies(),
+      getEmployeeJobRole(),
+      _ensureEmployeeSelectorLoaded(),
+    ]);
+    _workInfoEditLookupsLoaded = true;
   }
 
 
@@ -283,7 +326,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/employee/employees/$empId');
+    var uri = Uri.parse('$typedServerUrl/api/employee/employees/$empId/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -444,7 +487,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     var typedServerUrl = prefs.getString("typed_url");
     employeeWorkInfoId = employeeDetails['employee_work_info_id'];
     var uri = Uri.parse(
-        '$typedServerUrl/api/employee/employee-work-information/$employeeWorkInfoId');
+        '$typedServerUrl/api/employee/employee-work-information/$employeeWorkInfoId/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -452,7 +495,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     if (response.statusCode == 200) {
       setState(() {
         employeeWorkInfoRecord = jsonDecode(response.body);
-        getEmployeeJobRole();
+        jobRuleName = employeeWorkInfoRecord['job_role_name']?.toString() ?? '';
       });
     }
   }
@@ -534,43 +577,14 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Future<void> getReportingManager() async {
-    final prefs = await SharedPreferences.getInstance();
-    var token = prefs.getString("token");
-    var typedServerUrl = prefs.getString("typed_url");
-
-    for (var page = 1;; page++) {
-      var uri = Uri.parse('$typedServerUrl/api/employee/employees/?page=$page');
-      var response = await http.get(uri, headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer $token",
-      });
-
-      if (response.statusCode == 200) {
-        var responseBody = jsonDecode(response.body);
-        var results = responseBody['results'];
-
-        if (results == null || results.isEmpty) {
-          break; // ✅ No more data, exit loop
-        }
-
-        for (var employee in results) {
-          String firstName = "${employee['employee_first_name']}";
-          String employeeId = "${employee['id']}";
-          reportingManagerRecord.add(firstName);
-          managerIdMap[firstName] = employeeId;
-        }
-      } else {
-        print('Failed to fetch reporting managers: ${response.statusCode}');
-        break; // ✅ Stop on error to avoid infinite looping
-      }
-    }
+    await _ensureEmployeeSelectorLoaded();
   }
 
   Future<void> getEmployeeType() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/employee/employee-type');
+    var uri = Uri.parse('$typedServerUrl/api/employee/employee-type/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -657,7 +671,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     var typedServerUrl = prefs.getString("typed_url");
     employeeBankDetailsId = employeeDetails['employee_bank_details_id'];
     var uri = Uri.parse(
-        '$typedServerUrl/api/employee/employee-bank-details/$employeeBankDetailsId');
+        '$typedServerUrl/api/employee/employee-bank-details/$employeeBankDetailsId/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -685,7 +699,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
     for (var page = 1;; page++) {
       var uri = Uri.parse(
-          '$typedServerUrl/api/employee/employee-selector?page=$page');
+          '$typedServerUrl/api/employee/employee-selector/?page=$page');
       var response = await http.get(uri, headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer $token",
@@ -708,6 +722,8 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
             String employeeId = "${employee['id']}";
             employeeItems.add(fullName);
             employeeIdMap[fullName] = employeeId;
+            reportingManagerRecord.add(fullName);
+            managerIdMap[fullName] = employeeId;
           }
         });
       } else {
@@ -721,7 +737,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/base/worktypes');
+    var uri = Uri.parse('$typedServerUrl/api/base/worktypes/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -743,7 +759,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
-    var uri = Uri.parse('$typedServerUrl/api/base/rotating-worktypes');
+    var uri = Uri.parse('$typedServerUrl/api/base/rotating-worktypes/');
     var response = await http.get(uri, headers: {
       "Content-Type": "application/json",
       "Authorization": "Bearer $token",
@@ -2071,7 +2087,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     TextEditingController jobPositionController = TextEditingController(
         text: employeeWorkInfoRecord['job_position_name']?.toString() ?? '');
     TextEditingController jobRoleController =
-    TextEditingController(text: jobRuleName);
+    TextEditingController(text: employeeWorkInfoRecord['job_role_name']?.toString() ?? jobRuleName);
     TextEditingController shiftInfoController = TextEditingController(
         text: employeeWorkInfoRecord['shift_name']?.toString() ?? '');
     TextEditingController workTypeController = TextEditingController(
@@ -3405,7 +3421,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       context: context,
       position: const RelativeRect.fromLTRB(100, 80, 0, 0),
       items: menuItems,
-    ).then((value) {
+    ).then((value) async {
       if (value == 'personal') {
         isAction = false;
         _errorMessage = null;
@@ -3413,6 +3429,7 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       } else if (value == 'work') {
         isAction = false;
         _errorMessage = null;
+        await _ensureWorkInfoEditLookupsLoaded();
         _showEditWorkInfo(context, firstName, employeeWorkInfoRecord);
       } else if (value == 'bank') {
         isAction = false;
