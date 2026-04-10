@@ -6,6 +6,7 @@ import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'leave_request.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class LeaveOverview extends StatefulWidget {
   const LeaveOverview({super.key});
@@ -970,17 +971,12 @@ Widget buildLeaveTodayTile(BuildContext context, String fullName, String image,
                 if (image.isNotEmpty)
                   Positioned.fill(
                     child: ClipOval(
-                      child: Image.network(
-                        baseUrl + image,
-                        headers: {
-                          "Authorization": "Bearer $token",
-                        },
-                        fit: BoxFit.cover,
-                        errorBuilder: (BuildContext context, Object exception,
-                            StackTrace? stackTrace) {
-                          return const Icon(Icons.person, color: Colors.grey);
-                        },
-                      ),
+                      child: AuthenticatedNetworkImage(
+imageUrl: image,
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person, color: Colors.grey),
+                                ),
                     ),
                   ),
                 if (image.isEmpty)

@@ -7,6 +7,7 @@ import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:html/parser.dart' as html_parser;
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class AttendanceOverview extends StatefulWidget {
   const AttendanceOverview({super.key});
@@ -1025,17 +1026,12 @@ Widget buildOfflineEmployeesTile(
                   record['employee_profile'].isNotEmpty)
                 Positioned.fill(
                   child: ClipOval(
-                    child: Image.network(
-                      baseUrl + record['employee_profile'],
-                      headers: {
-                        "Authorization": "Bearer $token",
-                      },
-                      fit: BoxFit.cover,
-                      errorBuilder: (BuildContext context, Object exception,
-                          StackTrace? stackTrace) {
-                        return const Icon(Icons.person);
-                      },
-                    ),
+                    child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person),
+                                ),
                   ),
                 ),
               if (record['employee_profile'] == null ||
@@ -1129,8 +1125,8 @@ void _showEmailDialog(
                       children: [
                         Positioned.fill(
                           child: ClipOval(
-                            child: Image.network(
-                              baseUrl + record['employee_profile'],
+                            child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile'],
                               // headers: {
                               //   "Authorization": "Bearer $token",
                               // },
@@ -1303,131 +1299,13 @@ Future<Map<String, String>> getTemplate() async {
   var typedServerUrl = prefs.getString("typed_url");
 
   var uri = Uri.parse('$typedServerUrl/api/attendance/mail-templates');
-  var response = await http.get(uri, headers: {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer $token",
-  });
-  if (response.statusCode == 200) {
-    List<Map<String, dynamic>> templateList =
-    List<Map<String, dynamic>>.from(jsonDecode(response.body));
-
-    Map<String, String> templateMap = {};
-
-    for (var template in templateList) {
-      if (template.containsKey('id') && template.containsKey('title')) {
-        templateMap[template['id'].toString()] = template['title'].toString();
-      } else {}
-    }
-
-    return templateMap;
-  } else {
-    return {};
-  }
-}
-
-Future<void> sendEmail(
-    String recordId, String subject, String fetchedBodyContent) async {
-  final prefs = await SharedPreferences.getInstance();
-  var token = prefs.getString("token");
-  var typedServerUrl = prefs.getString("typed_url");
-
-  var uri =
-  Uri.parse('$typedServerUrl/api/attendance/offline-employee-mail-send');
-
-  var request = http.MultipartRequest('POST', uri);
-
-  request.headers['Authorization'] = 'Bearer $token';
-
-  request.fields['employee_id'] = recordId;
-  request.fields['subject'] = subject;
-  request.fields['body'] = fetchedBodyContent;
-  var response = await request.send();
-  if (response.statusCode == 200) {
-    print('Email Sent Successfully');
-  } else {}
-}
-
-Widget buildOvertimeValidate(
-    List<Map<String, dynamic>> requestsOvertimeValidate,
-    baseUrl,
-    scrollController,
-    token) {
-  return Padding(
-    padding: const EdgeInsets.all(8.0),
-    child: ListView.builder(
-      controller: scrollController,
-      itemCount: requestsOvertimeValidate.length,
-      itemBuilder: (context, index) {
-        Map<String, dynamic> record = requestsOvertimeValidate[index];
-        return Column(
-          children: [
-            GestureDetector(
-              onTap: () {
-                showDialog(
-                  context: context,
-                  builder: (BuildContext context) {
-                    return AlertDialog(
-                      backgroundColor: Colors.white,
-                      title: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          const Text(" "),
-                          IconButton(
-                            icon: const Icon(Icons.close, color: Colors.grey),
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                            },
-                          ),
-                        ],
-                      ),
-                      content: SizedBox(
-                        width: MediaQuery.of(context).size.width * 0.95,
-                        height: MediaQuery.of(context).size.height * 0.4,
-                        child: Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: SingleChildScrollView(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                  MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Container(
-                                      width: 40.0,
-                                      height: 40.0,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                            color: Colors.grey, width: 1.0),
-                                      ),
-                                      child: Stack(
-                                        children: [
-                                          if (record['employee_profile_url'] !=
-                                              null &&
-                                              record['employee_profile_url']
-                                                  .isNotEmpty)
-                                            Positioned.fill(
-                                              child: ClipOval(
-                                                child: Image.network(
-                                                  baseUrl +
-                                                      record[
-                                                      'employee_profile_url'],
-                                                  headers: {
-                                                    "Authorization":
-                                                    "Bearer $token",
-                                                  },
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (BuildContext
-                                                  context,
-                                                      Object exception,
-                                                      StackTrace? stackTrace) {
-                                                    return const Icon(
+  var response = await http.get(uri,
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(
                                                         Icons.person,
-                                                        color: Colors.grey);
-                                                  },
-                                                ),
+                                                        color: Colors.grey),
+                                ),
                                               ),
                                             ),
                                           if (record['employee_profile_url'] ==
@@ -1723,20 +1601,13 @@ Widget buildOvertimeValidate(
                                             .isNotEmpty)
                                       Positioned.fill(
                                         child: ClipOval(
-                                          child: Image.network(
-                                            baseUrl +
-                                                record['employee_profile_url'],
-                                            headers: {
-                                              "Authorization": "Bearer $token",
-                                            },
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (BuildContext context,
-                                                Object exception,
-                                                StackTrace? stackTrace) {
-                                              return const Icon(Icons.person,
-                                                  color: Colors.grey);
-                                            },
-                                          ),
+                                          child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile_url'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                                  color: Colors.grey),
+                                ),
                                         ),
                                       ),
                                     if (record['employee_profile_url'] ==
@@ -1886,24 +1757,15 @@ Widget buildNonValidatedAttendance(
                                                   .isNotEmpty)
                                             Positioned.fill(
                                               child: ClipOval(
-                                                child: Image.network(
-                                                  baseUrl +
-                                                      record[
+                                                child: AuthenticatedNetworkImage(
+imageUrl: record[
                                                       'employee_profile_url'],
-                                                  headers: {
-                                                    "Authorization":
-                                                    "Bearer $token",
-                                                  },
-                                                  fit: BoxFit.cover,
-                                                  errorBuilder: (BuildContext
-                                                  context,
-                                                      Object exception,
-                                                      StackTrace? stackTrace) {
-                                                    return const Icon(
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(
                                                         Icons.person,
-                                                        color: Colors.grey);
-                                                  },
-                                                ),
+                                                        color: Colors.grey),
+                                ),
                                               ),
                                             ),
                                           if (record['employee_profile_url'] ==
@@ -2196,20 +2058,13 @@ Widget buildNonValidatedAttendance(
                                             .isNotEmpty)
                                       Positioned.fill(
                                         child: ClipOval(
-                                          child: Image.network(
-                                            baseUrl +
-                                                record['employee_profile_url'],
-                                            headers: {
-                                              "Authorization": "Bearer $token",
-                                            },
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (BuildContext context,
-                                                Object exception,
-                                                StackTrace? stackTrace) {
-                                              return const Icon(Icons.person,
-                                                  color: Colors.grey);
-                                            },
-                                          ),
+                                          child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile_url'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                                  color: Colors.grey),
+                                ),
                                         ),
                                       ),
                                     if (record['employee_profile_url'] ==

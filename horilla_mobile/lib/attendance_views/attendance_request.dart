@@ -13,6 +13,7 @@ import '../res/utilities/permission_guard.dart';
 import '../res/utilities/attendance_request_ui.dart';
 import '../res/utilities/attachment_access.dart';
 import 'work_mode_request.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class AttendanceRequest extends StatefulWidget {
   const AttendanceRequest({super.key});
@@ -4812,18 +4813,12 @@ class _AttendanceRequest extends State<AttendanceRequest>
                               record['employee_profile_url'].isNotEmpty)
                             Positioned.fill(
                               child: ClipOval(
-                                child: Image.network(
-                                  baseUrl + record['employee_profile_url'],
-                                  headers: {
-                                    "Authorization": "Bearer $token",
-                                  },
+                                child: AuthenticatedNetworkImage(
+                                  imageUrl: record['employee_profile_url'],
+                                  baseUrl: baseUrl,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (BuildContext context,
-                                      Object exception,
-                                      StackTrace? stackTrace) {
-                                    return const Icon(Icons.person,
-                                        color: Colors.grey); // Fallback icon
-                                  },
+                                  errorWidget: const Icon(Icons.person,
+                                      color: Colors.grey),
                                 ),
                               ),
                             ),

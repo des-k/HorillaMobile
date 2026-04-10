@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthenticatedNetworkImage extends StatelessWidget {
-  final String imageUrl;
+  final String? imageUrl;
+  final String? baseUrl;
   final double? width;
   final double? height;
   final BoxFit fit;
@@ -13,6 +14,7 @@ class AuthenticatedNetworkImage extends StatelessWidget {
   const AuthenticatedNetworkImage({
     super.key,
     required this.imageUrl,
+    this.baseUrl,
     this.width,
     this.height,
     this.fit = BoxFit.cover,
@@ -26,16 +28,21 @@ class AuthenticatedNetworkImage extends StatelessWidget {
     return prefs.getString('token');
   }
 
-  Widget _wrap(Widget child) {
-    if (borderRadius != null) {
-      return ClipRRect(borderRadius: borderRadius!, child: child);
-    }
-    return child;
+  String? _resolveUrl() {
+    final raw = imageUrl?.trim() ?? '';
+    if (raw.isEmpty) return null;
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+    final base = (baseUrl ?? '').trim();
+    if (base.isEmpty) return raw;
+    final normalizedBase = base.endsWith('/') ? base.substring(0, base.length - 1) : base;
+    final normalizedRaw = raw.startsWith('/') ? raw : '/$raw';
+    return '$normalizedBase$normalizedRaw';
   }
 
   @override
   Widget build(BuildContext context) {
-    if (imageUrl.trim().isEmpty) {
+    final resolvedUrl = _resolveUrl();
+    if (resolvedUrl == null || resolvedUrl.isEmpty) {
       return errorWidget ?? const SizedBox.shrink();
     }
 
@@ -43,28 +50,24 @@ class AuthenticatedNetworkImage extends StatelessWidget {
       future: _loadToken(),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
-          return _wrap(
-            SizedBox(
-              width: width,
-              height: height,
-              child: Center(
-                child: placeholder ?? const CircularProgressIndicator(),
-              ),
-            ),
+          return SizedBox(
+            width: width,
+            height: height,
+            child: Center(child: placeholder ?? const CircularProgressIndicator()),
           );
         }
 
         final token = snapshot.data;
-        final headers = token == null || token.isEmpty
-            ? null
-            : {'Authorization': 'Bearer $token'};
-        final child = Image.network(
-          imageUrl,
-          key: ValueKey<String>('${imageUrl}|${token ?? ''}'),
+        if (token == null || token.isEmpty) {
+          return errorWidget ?? const SizedBox.shrink();
+        }
+
+        Widget child = Image.network(
+          resolvedUrl,
           width: width,
           height: height,
           fit: fit,
-          headers: headers,
+          headers: {'Authorization': 'Bearer $token'},
           errorBuilder: (_, __, ___) => errorWidget ?? const SizedBox.shrink(),
           loadingBuilder: (context, widget, progress) {
             if (progress == null) return widget;
@@ -75,7 +78,10 @@ class AuthenticatedNetworkImage extends StatelessWidget {
             );
           },
         );
-        return _wrap(child);
+        if (borderRadius != null) {
+          child = ClipRRect(borderRadius: borderRadius!, child: child);
+        }
+        return child;
       },
     );
   }

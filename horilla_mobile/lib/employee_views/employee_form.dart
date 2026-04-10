@@ -153,7 +153,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   bool isAction = false;
   bool checkFile = false;
   bool isLoadingImage = false;
-  int _employeeProfileImageVersion = 0;
   XFile? pickedFile;
   late String getToken = '';
 
@@ -230,16 +229,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     if (baseUrl.trim().isEmpty) return value;
     if (value.startsWith('/')) return '${baseUrl.trim()}$value';
     return '${baseUrl.trim()}/$value';
-  }
-
-  String _cacheBustedUrl(String raw, int version) {
-    final resolved = _absoluteMediaUrl(raw);
-    if (resolved.isEmpty || version <= 0) return resolved;
-    final uri = Uri.tryParse(resolved);
-    if (uri == null) return resolved;
-    final params = Map<String, String>.from(uri.queryParameters);
-    params['v'] = version.toString();
-    return uri.replace(queryParameters: params).toString();
   }
 
   bool _hasHomeCoordinates(Map<String, dynamic> wfhProfile) {
@@ -897,48 +886,26 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
     if (checkFile) {
       var attachment =
-          await http.MultipartFile.fromPath('employee_profile', filePath);
+      await http.MultipartFile.fromPath('employee_profile', filePath);
       request.files.add(attachment);
     }
     request.headers['Authorization'] = 'Bearer $token';
     var response = await request.send();
-    final responseBody = await response.stream.bytesToString();
     if (response.statusCode == 200) {
       _errorMessage = null;
-      final refreshVersion = DateTime.now().millisecondsSinceEpoch;
-      try {
-        final responseData = jsonDecode(responseBody);
-        if (mounted) {
-          setState(() {
-            employeeDetails = Map<String, dynamic>.from(responseData);
-            _employeeProfileImageVersion = refreshVersion;
-          });
-        }
-      } catch (_) {}
-      await getEmployeeDetails();
-      if (mounted) {
-        setState(() {
-          isLoadingImage = false;
-        });
-      }
+      getEmployeeDetails();
+      setState(() {});
+      setState(() {
+        isLoadingImage = false;
+      });
     } else {
-      try {
-        var errorJson = jsonDecode(responseBody);
-        if (errorJson.containsKey('non_field_errors')) {
-          _errorMessage = errorJson['non_field_errors'].join('\n');
-        } else if (errorJson.containsKey('employee_profile')) {
-          _errorMessage = errorJson['employee_profile'].join('\n');
-        } else {
-          _errorMessage = 'Failed to update employee image';
-        }
-      } catch (_) {
-        _errorMessage = 'Failed to update employee image';
+      var responseBody = await response.stream.bytesToString();
+      var errorJson = jsonDecode(responseBody);
+      if (errorJson.containsKey('non_field_errors')) {
+        _errorMessage = errorJson['non_field_errors'].join('\n');
+        setState(() {});
       }
-      if (mounted) {
-        setState(() {
-          isLoadingImage = false;
-        });
-      }
+      setState(() {});
     }
   }
 
@@ -1264,28 +1231,21 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Future<void> _pickImage(int id) async {
-    setState(() {
-      isLoadingImage = true;
-    });
+    isLoadingImage = true;
     XFile? file = await uploadFile(context);
-    if (file == null) {
-      if (mounted) {
-        setState(() {
-          isLoadingImage = false;
-        });
-      }
-      return;
+    if (file != null) {
+      setState(() async {
+        pickedFile = file;
+        fileName = file.name;
+        filePath = file.path;
+        checkFile = true;
+        Map<String, dynamic> updatedDetails = {
+          "id": id,
+        };
+        await updateEmployeeImage(
+            updatedDetails, checkFile, fileName, filePath);
+      });
     }
-
-    pickedFile = file;
-    fileName = file.name;
-    filePath = file.path;
-    checkFile = true;
-    Map<String, dynamic> updatedDetails = {
-      "id": id,
-    };
-    await updateEmployeeImage(
-        updatedDetails, checkFile, fileName, filePath);
   }
 
   Future<String?> showCustomDatePicker(
@@ -4156,13 +4116,11 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                   Positioned.fill(
                                     child: ClipOval(
                                       child: AuthenticatedNetworkImage(
-                                        imageUrl: _cacheBustedUrl(
-                                          (employeeDetails['employee_profile'] ?? '').toString(),
-                                          _employeeProfileImageVersion,
-                                        ),
-                                        fit: BoxFit.cover,
-                                        errorWidget: const Icon(Icons.person),
-                                      ),
+imageUrl: employeeDetails['employee_profile'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person),
+                                ),
                                     ),
                                   ),
                                 if (employeeDetails['employee_profile'] ==

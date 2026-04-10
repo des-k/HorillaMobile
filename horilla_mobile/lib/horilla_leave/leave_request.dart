@@ -9,11 +9,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../res/utilities/permission_guard.dart';
 import '../res/utilities/request_payloads.dart';
 import '../res/utilities/leave_request_form_logic.dart';
-import '../res/utilities/attachment_access.dart';
 import 'package:dropdown_search/dropdown_search.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'dart:io';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class LeaveRequest extends StatefulWidget {
   const LeaveRequest({super.key});
@@ -24,18 +24,6 @@ class LeaveRequest extends StatefulWidget {
 
 class _LeaveRequest extends State<LeaveRequest>
     with SingleTickerProviderStateMixin {
-  List<MobileAttachmentItem> _attachmentsFromPayload(dynamic payload) {
-    if (payload is Map) {
-      return extractMobileAttachments(Map<String, dynamic>.from(payload), baseUrl: baseUrl);
-    }
-    return const <MobileAttachmentItem>[];
-  }
-
-  Future<void> _openPayloadAttachment(dynamic payload) async {
-    final items = _attachmentsFromPayload(payload);
-    if (items.isEmpty) return;
-    await openMobileAttachment(context, items.first, baseUrl: baseUrl);
-  }
   String _getBreakdown(String breakdownValue) {
     return leaveBreakdownLabel(breakdownValue);
   }
@@ -1882,7 +1870,7 @@ class _LeaveRequest extends State<LeaveRequest>
                                 ),
                               ),
                               if (currentLeaveRequests.isNotEmpty &&
-                                  _attachmentsFromPayload(currentLeaveRequests[0]).isNotEmpty)
+                                  currentLeaveRequests[0]['attachment'] != null)
                                 Row(
                                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
@@ -1891,7 +1879,29 @@ class _LeaveRequest extends State<LeaveRequest>
                                       style: TextStyle(color: Colors.grey.shade700),
                                     ),
                                     TextButton(
-                                      onPressed: () => _openPayloadAttachment(currentLeaveRequests[0]),
+                                      onPressed: () {
+                                        String pdfPath =
+                                        currentLeaveRequests[0]['attachment'];
+                                        if (pdfPath.endsWith('.png') ||
+                                            pdfPath.endsWith('.jpg') ||
+                                            pdfPath.endsWith('.jpeg') ||
+                                            pdfPath.endsWith('.gif')) {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (context) =>
+                                                  ImageViewer(imagePath: pdfPath,
+                                                    token: getToken,),
+                                            ),
+                                          );
+                                        } else {
+                                          Navigator.pushNamed(
+                                            context,
+                                            '/attachment_view',
+                                            arguments: pdfPath,
+                                          );
+                                        }
+                                      },
                                       child: const Text(
                                         'View Attachment',
                                         style: TextStyle(
@@ -3519,21 +3529,14 @@ class _LeaveRequest extends State<LeaveRequest>
                                           .isNotEmpty)
                                     Positioned.fill(
                                       child: ClipOval(
-                                        child: Image.network(
-                                          baseUrl +
-                                              record['employee_id']
+                                        child: AuthenticatedNetworkImage(
+imageUrl: record['employee_id']
                                               ['employee_profile'],
-                                          headers: {
-                                            "Authorization": "Bearer $token",
-                                          },
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (BuildContext context,
-                                              Object exception,
-                                              StackTrace? stackTrace) {
-                                            return const Icon(Icons.person,
-                                                color: Colors.grey);
-                                          },
-                                        ),
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                                color: Colors.grey),
+                                ),
                                       ),
                                     ),
                                   if (record['employee_id']
@@ -3712,7 +3715,7 @@ class _LeaveRequest extends State<LeaveRequest>
                           ],
                         ),
                         if (currentLeaveRequests.isNotEmpty &&
-                            _attachmentsFromPayload(currentLeaveRequests[0]).isNotEmpty)
+                            currentLeaveRequests[0]['attachment'] != null)
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
@@ -3721,7 +3724,29 @@ class _LeaveRequest extends State<LeaveRequest>
                                 style: TextStyle(color: Colors.grey.shade700),
                               ),
                               TextButton(
-                                onPressed: () => _openPayloadAttachment(currentLeaveRequests[0]),
+                                onPressed: () {
+                                  String pdfPath =
+                                  currentLeaveRequests[0]['attachment'];
+                                  if (pdfPath.endsWith('.png') ||
+                                      pdfPath.endsWith('.jpg') ||
+                                      pdfPath.endsWith('.jpeg') ||
+                                      pdfPath.endsWith('.gif')) {
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) =>
+                                            ImageViewer(imagePath: pdfPath,
+                                              token: getToken,),
+                                      ),
+                                    );
+                                  } else {
+                                    Navigator.pushNamed(
+                                      context,
+                                      '/attachment_view',
+                                      arguments: pdfPath,
+                                    );
+                                  }
+                                },
                                 child: const Text(
                                   'View Attachment',
                                   style: TextStyle(
@@ -4114,18 +4139,12 @@ class _LeaveRequest extends State<LeaveRequest>
                                     .isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl +
-                                        record['employee_id']
+                                  child: AuthenticatedNetworkImage(
+imageUrl: record['employee_id']
                                         ['employee_profile'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
                                           color: Colors.grey); // Fallback icon
                                     },
                                   ),
@@ -4208,9 +4227,8 @@ class _LeaveRequest extends State<LeaveRequest>
                                   getAllEmployeesName();
                                   getAllLeaveTypeName();
                                   _showUpdateDialog(context, record,
-                                      currentRequests, recordId);
-                                },
-                              ),
+                                      currentRequests, recordId),
+                                ),
                             ),
                           ),
                           Container(

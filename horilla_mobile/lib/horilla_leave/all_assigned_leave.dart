@@ -7,6 +7,7 @@ import '../res/utilities/permission_guard.dart';
 import 'package:multiselect_dropdown_flutter/multiselect_dropdown_flutter.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class AllAssignedLeave extends StatefulWidget {
   const AllAssignedLeave({super.key});
@@ -1066,22 +1067,17 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
                                             .isNotEmpty)
                                       Positioned.fill(
                                         child: ClipOval(
-                                          child: Image.network(
-                                            leaveRecords[0]['leave_type_id']['icon'],
-                                            headers: {
-                                              "Authorization": "Bearer $token",
-                                            },
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (BuildContext
-                                            context,
-                                                Object exception,
-                                                StackTrace? stackTrace) {
-                                              return const Icon(
+                                          child: AuthenticatedNetworkImage(
+imageUrl: leaveRecords[0]
+                                                ['leave_type_id']
+                                                ['icon'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(
                                                   Icons
                                                       .calendar_month_outlined,
-                                                  color: Colors.grey);
-                                            },
-                                          ),
+                                                  color: Colors.grey),
+                                ),
                                         ),
                                       ),
                                     if (leaveRecords[0]['leave_type_id']
@@ -1142,25 +1138,15 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
                                                 profile.isNotEmpty)
                                               Positioned.fill(
                                                 child: ClipOval(
-                                                  child: Image.network(
-                                                    baseUrl + profile,
-                                                    headers: {
-                                                      "Authorization": "Bearer $token",
-                                                    },
-                                                    fit: BoxFit.cover,
-                                                    errorBuilder:
-                                                        (BuildContext
-                                                    context,
-                                                        Object
-                                                        exception,
-                                                        StackTrace?
-                                                        stackTrace) {
-                                                      return const Icon(
+                                                  child: AuthenticatedNetworkImage(
+imageUrl: profile,
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(
                                                           Icons.person,
                                                           color: Colors
-                                                              .grey);
-                                                    },
-                                                  ),
+                                                              .grey),
+                                ),
                                                 ),
                                               ),
                                             if (profile == null ||

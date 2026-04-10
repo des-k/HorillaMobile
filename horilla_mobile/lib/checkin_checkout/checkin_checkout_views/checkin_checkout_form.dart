@@ -26,6 +26,7 @@ import 'package:horilla/res/utilities/device_info.dart';
 import 'package:horilla/res/utilities/mobile_attendance_settings.dart';
 import 'face_detection.dart';
 import 'mobile_header_state.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class CheckInCheckOutFormTestOverrides {
   const CheckInCheckOutFormTestOverrides({
@@ -3002,12 +3003,11 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
                           if (requestsEmpProfile.isNotEmpty)
                             Positioned.fill(
                               child: ClipOval(
-                                child: Image.network(
-                                  baseUrl + requestsEmpProfile,
-                                  headers: {'Authorization': 'Bearer $getToken'},
+                                child: AuthenticatedNetworkImage(
+                                  imageUrl: requestsEmpProfile,
+                                  baseUrl: baseUrl,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (context, exception, stackTrace) =>
-                                  const Icon(Icons.person, color: Colors.grey),
+                                  errorWidget: const Icon(Icons.person, color: Colors.grey),
                                 ),
                               ),
                             ),

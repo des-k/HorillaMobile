@@ -7,6 +7,7 @@ import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class HourAccountFormPage extends StatefulWidget {
   const HourAccountFormPage({super.key});
@@ -1518,20 +1519,13 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
                                     record['employee_profile_url'].isNotEmpty)
                                   Positioned.fill(
                                     child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            record['employee_profile_url'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
+                                      child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile_url'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                              color: Colors.grey),
+                                ),
                                     ),
                                   ),
                                 if (record['employee_profile_url'] == null ||
@@ -1710,19 +1704,13 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
                                 record['employee_profile_url'].isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl + record['employee_profile_url'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
+                                  child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile_url'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                          color: Colors.grey),
+                                ),
                                 ),
                               ),
                             if (record['employee_profile_url'] == null ||

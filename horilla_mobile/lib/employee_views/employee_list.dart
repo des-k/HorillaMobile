@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class EmployeeListPage extends StatefulWidget {
   const EmployeeListPage({super.key});
@@ -216,16 +217,12 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
                     record['employee_profile'].isNotEmpty)
                   Positioned.fill(
                     child: ClipOval(
-                      child: Image.network(
-                        baseUrl + record['employee_profile'],
-                        headers: {
-                          "Authorization": "Bearer $token",
-                        },
-                        fit: BoxFit.cover,
-                        errorBuilder: (BuildContext context, Object exception, StackTrace? stackTrace) {
-                          return const Icon(Icons.person);
-                        },
-                      ),
+                      child: AuthenticatedNetworkImage(
+imageUrl: record['employee_profile'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person),
+                                ),
                     ),
                   ),
                 if (record['employee_profile'] == null ||

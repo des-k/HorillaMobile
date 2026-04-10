@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class MyAttendanceViews extends StatefulWidget {
   const MyAttendanceViews({super.key});
@@ -210,18 +211,13 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
                         if (employeeProfile.isNotEmpty)
                           Positioned.fill(
                             child: ClipOval(
-                              child: Image.network(
-                                baseUrl + employeeProfile,
-                                headers: {
-                                  "Authorization": "Bearer $getToken",
-                                },
-                                fit: BoxFit.cover,
-                                errorBuilder: (BuildContext context,
-                                    Object exception, StackTrace? stackTrace) {
-                                  return const Icon(Icons.person,
-                                      color: Colors.grey);
-                                },
-                              ),
+                              child: AuthenticatedNetworkImage(
+imageUrl: employeeProfile,
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                      color: Colors.grey),
+                                ),
                             ),
                           ),
                         if (employeeProfile.isEmpty)

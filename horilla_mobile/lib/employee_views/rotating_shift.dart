@@ -6,6 +6,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class RotatingShiftPage extends StatefulWidget {
   final String selectedEmployerId;
@@ -1622,20 +1623,13 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
                                         .isNotEmpty)
                                   Positioned.fill(
                                     child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            employeeDetails['employee_profile'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
+                                      child: AuthenticatedNetworkImage(
+imageUrl: employeeDetails['employee_profile'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                              color: Colors.grey),
+                                ),
                                     ),
                                   ),
                                 if (employeeDetails['employee_profile'] ==
@@ -1833,20 +1827,13 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
                                 employeeDetails['employee_profile'].isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl +
-                                        employeeDetails['employee_profile'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
+                                  child: AuthenticatedNetworkImage(
+imageUrl: employeeDetails['employee_profile'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                          color: Colors.grey),
+                                ),
                                 ),
                               ),
                             if (employeeDetails['employee_profile'] == null ||

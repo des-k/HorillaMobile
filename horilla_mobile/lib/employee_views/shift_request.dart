@@ -6,6 +6,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class ShiftRequestPage extends StatefulWidget {
   final String selectedEmployerId;
@@ -1723,21 +1724,14 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
                                               .isNotEmpty)
                                         Positioned.fill(
                                           child: ClipOval(
-                                            child: Image.network(
-                                              baseUrl +
-                                                  employeeDetails[
+                                            child: AuthenticatedNetworkImage(
+imageUrl: employeeDetails[
                                                   'employee_profile'],
-                                              headers: {
-                                                "Authorization": "Bearer $token",
-                                              },
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (BuildContext context,
-                                                  Object exception,
-                                                  StackTrace? stackTrace) {
-                                                return const Icon(Icons.person,
-                                                    color: Colors.grey);
-                                              },
-                                            ),
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                                    color: Colors.grey),
+                                ),
                                           ),
                                         ),
                                       if (employeeDetails['employee_profile'] ==
@@ -2349,20 +2343,13 @@ class _ShiftRequestPageState extends State<ShiftRequestPage> {
                                 employeeDetails['employee_profile'].isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl +
-                                        employeeDetails['employee_profile'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
+                                  child: AuthenticatedNetworkImage(
+imageUrl: employeeDetails['employee_profile'],
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                          color: Colors.grey),
+                                ),
                                 ),
                               ),
                             if (employeeDetails['employee_profile'] == null ||

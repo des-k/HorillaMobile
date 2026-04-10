@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../res/utilities/permission_guard.dart';
-import '../res/utilities/attachment_access.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'dart:io';
+import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class LeaveAllocationRequest extends StatefulWidget {
   const LeaveAllocationRequest({super.key});
@@ -19,18 +19,6 @@ class LeaveAllocationRequest extends StatefulWidget {
 
 class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
     with SingleTickerProviderStateMixin {
-  List<MobileAttachmentItem> _attachmentsFromPayload(dynamic payload) {
-    if (payload is Map) {
-      return extractMobileAttachments(Map<String, dynamic>.from(payload), baseUrl: baseUrl);
-    }
-    return const <MobileAttachmentItem>[];
-  }
-
-  Future<void> _openPayloadAttachment(dynamic payload) async {
-    final items = _attachmentsFromPayload(payload);
-    if (items.isEmpty) return;
-    await openMobileAttachment(context, items.first, baseUrl: baseUrl);
-  }
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final _controller = NotchBottomBarController(index: -1);
   final TextEditingController _typeAheadEditController =
@@ -1011,7 +999,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                           SizedBox(
                               height:
                               MediaQuery.of(context).size.height * 0.02),
-                          if (_attachmentsFromPayload(record).isNotEmpty)
+                          if (record['attachment'] != null)
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
@@ -1020,7 +1008,30 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                   style: TextStyle(color: Colors.grey.shade700),
                                 ),
                                 TextButton(
-                                  onPressed: () => _openPayloadAttachment(record),
+                                  onPressed: () {
+                                    String pdfPath =
+                                        baseUrl + record['attachment'];
+                                    if (pdfPath.endsWith('.png') ||
+                                        pdfPath.endsWith('.jpg') ||
+                                        pdfPath.endsWith('.jpeg') ||
+                                        pdfPath.endsWith('.gif')) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ImageViewer(
+                                            imagePath: pdfPath,
+                                            token: getToken,
+                                          ),
+                                        ),
+                                      );
+                                    } else {
+                                      Navigator.pushNamed(
+                                        context,
+                                        '/attachment_view',
+                                        arguments: pdfPath,
+                                      );
+                                    }
+                                  },
                                   child: const Text(
                                     'View Attachment',
                                     style: TextStyle(
@@ -1339,7 +1350,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                     ),
                   ),
                   SizedBox(height: MediaQuery.of(context).size.height * 0.02),
-                  if (_attachmentsFromPayload(record).isNotEmpty)
+                  if (record['attachment'] != null)
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
@@ -1348,7 +1359,29 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                           style: TextStyle(color: Colors.grey.shade700),
                         ),
                         TextButton(
-                          onPressed: () => _openPayloadAttachment(record),
+                          onPressed: () {
+                            String pdfPath = baseUrl + record['attachment'];
+                            if (pdfPath.endsWith('.png') ||
+                                pdfPath.endsWith('.jpg') ||
+                                pdfPath.endsWith('.jpeg') ||
+                                pdfPath.endsWith('.gif')) {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ImageViewer(
+                                    imagePath: pdfPath,
+                                    token: getToken,
+                                  ),
+                                ),
+                              );
+                            } else {
+                              Navigator.pushNamed(
+                                context,
+                                '/attachment_view',
+                                arguments: pdfPath,
+                              );
+                            }
+                          },
                           child: const Text(
                             'View Attachment',
                             style: TextStyle(
@@ -2899,21 +2932,14 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                             .isNotEmpty)
                                       Positioned.fill(
                                         child: ClipOval(
-                                          child: Image.network(
-                                            baseUrl +
-                                                record['employee_id']
+                                          child: AuthenticatedNetworkImage(
+imageUrl: record['employee_id']
                                                 ['employee_profile'],
-                                            headers: {
-                                              "Authorization": "Bearer $token",
-                                            },
-                                            fit: BoxFit.cover,
-                                            errorBuilder: (BuildContext context,
-                                                Object exception,
-                                                StackTrace? stackTrace) {
-                                              return const Icon(Icons.person,
-                                                  color: Colors.grey);
-                                            },
-                                          ),
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                                  color: Colors.grey),
+                                ),
                                         ),
                                       ),
                                     if (record['employee_id']['employee_profile'] ==
@@ -3045,7 +3071,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                               ),
                             ],
                           ),
-                          if (_attachmentsFromPayload(record).isNotEmpty)
+                          if (record['attachment'] != null)
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
@@ -3054,7 +3080,29 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                   style: TextStyle(color: Colors.grey.shade700),
                                 ),
                                 TextButton(
-                                  onPressed: () => _openPayloadAttachment(record),
+                                  onPressed: () {
+                                    String pdfPath = baseUrl + record['attachment'];
+                                    if (pdfPath.endsWith('.png') ||
+                                        pdfPath.endsWith('.jpg') ||
+                                        pdfPath.endsWith('.jpeg') ||
+                                        pdfPath.endsWith('.gif')) {
+                                      Navigator.push(
+                                        context,
+                                        MaterialPageRoute(
+                                          builder: (context) => ImageViewer(
+                                            imagePath: pdfPath,
+                                            token: getToken,
+                                          ),
+                                        ),
+                                      );
+                                    } else {
+                                      Navigator.pushNamed(
+                                        context,
+                                        '/attachment_view',
+                                        arguments: pdfPath,
+                                      );
+                                    }
+                                  },
                                   child: const Text(
                                     'View Attachment',
                                     style: TextStyle(
@@ -3122,21 +3170,14 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                     .isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl +
-                                        record['employee_id']
+                                  child: AuthenticatedNetworkImage(
+imageUrl: record['employee_id']
                                         ['employee_profile'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                          color: Colors.grey),
+                                ),
                                 ),
                               ),
                             if (record['employee_id']['employee_profile'] ==
@@ -3457,21 +3498,14 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                         .isNotEmpty)
                                   Positioned.fill(
                                     child: ClipOval(
-                                      child: Image.network(
-                                        baseUrl +
-                                            record['employee_id']
+                                      child: AuthenticatedNetworkImage(
+imageUrl: record['employee_id']
                                             ['employee_profile'],
-                                        headers: {
-                                          "Authorization": "Bearer $token",
-                                        },
-                                        fit: BoxFit.cover,
-                                        errorBuilder: (BuildContext context,
-                                            Object exception,
-                                            StackTrace? stackTrace) {
-                                          return const Icon(Icons.person,
-                                              color: Colors.grey);
-                                        },
-                                      ),
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                              color: Colors.grey),
+                                ),
                                     ),
                                   ),
                                 if (record['employee_id']['employee_profile'] ==
@@ -3606,7 +3640,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                           ),
                         ],
                       ),
-                      if (_attachmentsFromPayload(record).isNotEmpty)
+                      if (record['attachment'] != null)
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
@@ -3615,7 +3649,29 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                               style: TextStyle(color: Colors.grey.shade700),
                             ),
                             TextButton(
-                              onPressed: () => _openPayloadAttachment(record),
+                              onPressed: () {
+                                String pdfPath = baseUrl + record['attachment'];
+                                if (pdfPath.endsWith('.png') ||
+                                    pdfPath.endsWith('.jpg') ||
+                                    pdfPath.endsWith('.jpeg') ||
+                                    pdfPath.endsWith('.gif')) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ImageViewer(
+                                        imagePath: pdfPath,
+                                        token: getToken,
+                                      ),
+                                    ),
+                                  );
+                                } else {
+                                  Navigator.pushNamed(
+                                    context,
+                                    '/attachment_view',
+                                    arguments: pdfPath,
+                                  );
+                                }
+                              },
                               child: const Text(
                                 'View Attachment',
                                 style: TextStyle(
@@ -3881,21 +3937,14 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
                                     .isNotEmpty)
                               Positioned.fill(
                                 child: ClipOval(
-                                  child: Image.network(
-                                    baseUrl +
-                                        record['employee_id']
+                                  child: AuthenticatedNetworkImage(
+imageUrl: record['employee_id']
                                         ['employee_profile'],
-                                    headers: {
-                                      "Authorization": "Bearer $token",
-                                    },
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (BuildContext context,
-                                        Object exception,
-                                        StackTrace? stackTrace) {
-                                      return const Icon(Icons.person,
-                                          color: Colors.grey);
-                                    },
-                                  ),
+                                  baseUrl: baseUrl,
+                                  fit: BoxFit.cover,
+                                  errorWidget: const Icon(Icons.person,
+                                          color: Colors.grey),
+                                ),
                                 ),
                               ),
                             if (record['employee_id']['employee_profile'] ==
