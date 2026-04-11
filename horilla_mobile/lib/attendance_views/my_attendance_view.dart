@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class MyAttendanceViews extends StatefulWidget {
   const MyAttendanceViews({super.key});
@@ -114,9 +115,7 @@ class _MyAttendanceViews extends State<MyAttendanceViews>
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],

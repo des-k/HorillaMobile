@@ -7,6 +7,7 @@ import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class RotatingShiftPage extends StatefulWidget {
   final String selectedEmployerId;
@@ -215,9 +216,7 @@ class _WorkTypeRequestPageState extends State<RotatingShiftPage> {
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -1854,9 +1853,7 @@ imageUrl: employeeDetails['employee_profile'],
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              employeeDetails['employee_first_name'] +
-                                  ' ' +
-                                  (employeeDetails['employee_last_name'] ?? ''),
+                              buildEmployeeName(employeeDetails),
                               style: const TextStyle(
                                   fontSize: 16.0, fontWeight: FontWeight.bold),
                               maxLines: 2,

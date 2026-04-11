@@ -7,6 +7,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'leave_request.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class LeaveOverview extends StatefulWidget {
   const LeaveOverview({super.key});
@@ -166,9 +167,7 @@ class _LeaveOverview extends State<LeaveOverview>
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],

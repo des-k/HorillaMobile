@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:timeago/timeago.dart' as timeago;
 import 'notification_router.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class NotificationsList extends StatefulWidget {
   const NotificationsList({super.key});
@@ -62,9 +63,7 @@ class _NotificationsListState extends State<NotificationsList> {
       setState(() {
         arguments = {
           'employee_id': responseData['id'],
-          'employee_name': responseData['employee_first_name'] +
-              ' ' +
-              responseData['employee_last_name'],
+          'employee_name': buildEmployeeName(responseData),
           'badge_id': responseData['badge_id'],
           'email': responseData['email'],
           'phone': responseData['phone'],

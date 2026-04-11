@@ -11,6 +11,7 @@ import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:shimmer/shimmer.dart';
 import '../res/utilities/permission_guard.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class MyLeaveRequest extends StatefulWidget {
   const MyLeaveRequest({super.key});
@@ -327,9 +328,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -454,9 +453,7 @@ class _MyLeaveRequest extends State<MyLeaveRequest>
     if (response.statusCode == 200) {
       setState(() {
         var employeeData = jsonDecode(response.body);
-        employeeName = employeeData['employee_first_name'] +
-            ' ' +
-            (employeeData['employee_last_name'] ?? '');
+        employeeName = buildEmployeeName(employeeData);
       });
     }
   }

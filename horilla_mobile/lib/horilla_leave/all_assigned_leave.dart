@@ -8,6 +8,7 @@ import 'package:multiselect_dropdown_flutter/multiselect_dropdown_flutter.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class AllAssignedLeave extends StatefulWidget {
   const AllAssignedLeave({super.key});
@@ -183,9 +184,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -243,7 +242,7 @@ class _AllAssignedLeave extends State<AllAssignedLeave> {
         setState(() {
           for (var employee in results) {
             String fullName =
-            "${employee['employee_first_name'] ?? ''} ${employee['employee_last_name'] ?? ''}".trim();
+            buildEmployeeName(employee);
             employeeItems.add(fullName);
             employeeItemsId.add(employee['id']);
           }

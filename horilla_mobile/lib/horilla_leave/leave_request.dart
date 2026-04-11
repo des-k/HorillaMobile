@@ -14,6 +14,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'package:shimmer/shimmer.dart';
 import 'dart:io';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class LeaveRequest extends StatefulWidget {
   const LeaveRequest({super.key});
@@ -378,9 +379,7 @@ class _LeaveRequest extends State<LeaveRequest>
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -694,7 +693,7 @@ class _LeaveRequest extends State<LeaveRequest>
         employeeItem.clear();
         for (var employee in jsonDecode(response.body)['results']) {
           String fullName =
-              "${employee['employee_first_name']} ${employee['employee_last_name']}";
+              buildEmployeeName(employee);
           String employeeId = "${employee['id']}";
           employeeItem.add(fullName);
           employeeIdMap[fullName] = employeeId;
@@ -1241,7 +1240,7 @@ class _LeaveRequest extends State<LeaveRequest>
 
         setState(() {
           for (var employee in results) {
-            var employeeName = "${employee['employee_first_name'] ?? ''} ${employee['employee_last_name'] ?? ''}".trim();
+            var employeeName = buildEmployeeName(employee);
             allEmployeeNames.add(employeeName);
           }
         });

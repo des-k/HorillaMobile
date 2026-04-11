@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../res/utilities/permission_guard.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class LeaveTypes extends StatefulWidget {
   const LeaveTypes({super.key});
@@ -156,9 +157,7 @@ class _LeaveTypes extends State<LeaveTypes> {
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],

@@ -8,6 +8,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class HourAccountFormPage extends StatefulWidget {
   const HourAccountFormPage({super.key});
@@ -238,9 +239,7 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -657,9 +656,7 @@ class _HourAccountFormPageState extends State<HourAccountFormPage> {
     TextEditingController(text: record['pending_hours'] ?? '');
     TextEditingController overtimeEditingHoursController =
     TextEditingController(text: record['overtime'] ?? '');
-    _typeAheadController.text = (record['employee_first_name'] ?? "") +
-        " " +
-        (record['employee_last_name'] ?? "");
+    _typeAheadController.text = buildEmployeeName(record);
     showDialog(
       context: context,
       builder: (
@@ -1545,10 +1542,7 @@ imageUrl: record['employee_profile_url'],
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  record['employee_first_name'] +
-                                      " " +
-                                      record['employee_last_name'] ??
-                                      '',
+                                  buildEmployeeName(record),
                                   style: const TextStyle(
                                       fontSize: 16.0,
                                       fontWeight: FontWeight.bold),
@@ -1729,9 +1723,7 @@ imageUrl: record['employee_profile_url'],
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              record['employee_first_name'] +
-                                  ' ' +
-                                  (record['employee_last_name'] ?? ''),
+                              buildEmployeeName(record),
                               style: const TextStyle(
                                   fontSize: 16.0, fontWeight: FontWeight.bold),
                               maxLines: 2,

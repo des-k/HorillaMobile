@@ -90,9 +90,13 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
     });
   }
 
+  String _cleanOptionalText(dynamic value) {
+    return (value ?? '').toString().trim();
+  }
+
   String _buildEmployeeName(Map<String, dynamic> source) {
-    final firstName = (source['employee_first_name'] ?? '').toString().trim();
-    final lastName = (source['employee_last_name'] ?? '').toString().trim();
+    final firstName = _cleanOptionalText(source['employee_first_name']);
+    final lastName = _cleanOptionalText(source['employee_last_name']);
     return [firstName, lastName].where((e) => e.isNotEmpty).join(' ');
   }
 
@@ -195,10 +199,8 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
   List<dynamic> filterRecords(String searchText) {
     List<dynamic> allRecords = requests;
     List<dynamic> filteredRecords = allRecords.where((record) {
-      final firstName = record['employee_first_name'] ?? '';
-      final lastName = record['employee_last_name'] ?? '';
-      final fullName = (firstName + ' ' + lastName).toLowerCase();
-      final jobPosition = record['job_position_name'] ?? '';
+      final fullName = _buildEmployeeName(record).toLowerCase();
+      final jobPosition = _cleanOptionalText(record['job_position_name']);
       return fullName.contains(searchText.toLowerCase()) ||
           jobPosition.toLowerCase().contains(searchText.toLowerCase());
     }).toList();
@@ -259,8 +261,10 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
   }
 
   Widget buildListItem(Map<String, dynamic> record, baseUrl, token) {
-    String position = record['job_position_name'] ?? 'Unknown';
-    Color positionColor = _getColorForPosition(position);
+    final position = _cleanOptionalText(record['job_position_name']);
+    final hasPosition = position.isNotEmpty;
+    final positionColor =
+        hasPosition ? _getColorForPosition(position) : Colors.transparent;
     final resolvedImageUrl = _recordProfileAvatarUrl(record);
     final resolvedCacheVersion = _recordProfileAvatarVersion(record);
     final resolvedCacheKey = _recordProfileAvatarCacheKey(record);
@@ -332,33 +336,34 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
             ),
           ),
           trailing: SizedBox(
-            width: 150,
+            width: hasPosition ? 150 : 40,
             child: Row(
               children: [
-                Flexible(
-                  child: Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: Container(
-                      width: 100,
-                      height: 25,
-                      padding: const EdgeInsets.fromLTRB(10.0, 1.0, 10.0, 1.0),
-                      decoration: BoxDecoration(
-                        color: positionColor.withOpacity(0.03),
-                        borderRadius: BorderRadius.circular(10.0),
-                      ),
-                      child: Center(
-                        child: Text(
-                          position,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 13.0,
-                            color: positionColor,
+                if (hasPosition)
+                  Flexible(
+                    child: Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Container(
+                        width: 100,
+                        height: 25,
+                        padding: const EdgeInsets.fromLTRB(10.0, 1.0, 10.0, 1.0),
+                        decoration: BoxDecoration(
+                          color: positionColor.withOpacity(0.03),
+                          borderRadius: BorderRadius.circular(10.0),
+                        ),
+                        child: Center(
+                          child: Text(
+                            position,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13.0,
+                              color: positionColor,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 const Padding(
                   padding: EdgeInsets.all(4.0),
                   child: Icon(Icons.keyboard_arrow_right),

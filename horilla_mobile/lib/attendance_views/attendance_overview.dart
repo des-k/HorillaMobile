@@ -8,6 +8,7 @@ import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_not
 import 'package:shimmer/shimmer.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class AttendanceOverview extends StatefulWidget {
   const AttendanceOverview({super.key});
@@ -159,9 +160,7 @@ class _AttendanceOverviewState extends State<AttendanceOverview>
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -1047,9 +1046,7 @@ Widget buildOfflineEmployeesTile(
           ),
         ),
         title: Text(
-          record['employee_first_name'] +
-              ' ' +
-              (record['employee_last_name'] ?? ''),
+          buildEmployeeName(record),
           style: const TextStyle(
             fontSize: 16.0,
             color: Colors.black,
@@ -1138,7 +1135,7 @@ void _showEmailDialog(
                 Column(
                   children: [
                     Text(
-                        '${record['employee_first_name']} ${record['employee_last_name']}'),
+                        buildEmployeeName(record)),
                   ],
                 ),
                 IconButton(
@@ -1431,10 +1428,7 @@ Widget buildNonValidatedAttendance(
                                         CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            (record['employee_first_name'] ??
-                                                '') +
-                                                (record['employee_last_name'] ??
-                                                    ''),
+                                            buildEmployeeName(record),
                                             style: const TextStyle(
                                                 fontSize: 15.0,
                                                 fontWeight: FontWeight.bold),
@@ -1726,8 +1720,7 @@ Widget buildNonValidatedAttendance(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      (record['employee_first_name'] ?? '') +
-                                          (record['employee_last_name'] ?? ''),
+                                      buildEmployeeName(record),
                                       style: const TextStyle(
                                           fontSize: 15.0,
                                           fontWeight: FontWeight.bold),

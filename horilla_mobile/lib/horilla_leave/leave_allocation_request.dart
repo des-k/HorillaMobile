@@ -9,6 +9,7 @@ import 'package:shimmer/shimmer.dart';
 import 'package:flutter_typeahead/flutter_typeahead.dart';
 import 'dart:io';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class LeaveAllocationRequest extends StatefulWidget {
   const LeaveAllocationRequest({super.key});
@@ -275,9 +276,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -647,7 +646,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
 
         setState(() {
           for (var employee in results) {
-            String fullName = "${employee['employee_first_name']} ${employee['employee_last_name']}".trim();
+            String fullName = buildEmployeeName(employee);
             String employeeId = "${employee['id']}";
             employeeItem.add(fullName);
             employeeIdMap[fullName] = employeeId;
@@ -1869,9 +1868,7 @@ class _LeaveAllocationRequest extends State<LeaveAllocationRequest>
           jsonDecode(response.body)['results'],
         );
         for (var rec in requestsEmployeesName) {
-          var employees = rec['employee_first_name'] +
-              ' ' +
-              (rec['employee_last_name'] ?? '');
+          var employees = buildEmployeeName(rec);
           employeeItems.add(employees);
         }
       });

@@ -27,6 +27,7 @@ import 'package:horilla/res/utilities/mobile_attendance_settings.dart';
 import 'face_detection.dart';
 import 'mobile_header_state.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 class CheckInCheckOutFormTestOverrides {
   const CheckInCheckOutFormTestOverrides({
@@ -527,7 +528,7 @@ class _CheckInCheckOutFormPageState extends State<CheckInCheckOutFormPage> with 
 
     arguments = {
       'employee_id': responseData['id'],
-      'employee_name': '${responseData['employee_first_name'] ?? ''} ${responseData['employee_last_name'] ?? ''}'.trim(),
+      'employee_name': buildEmployeeName(responseData),
       'badge_id': responseData['badge_id'],
       'email': responseData['email'],
       'phone': responseData['phone'],

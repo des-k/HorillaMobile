@@ -28,6 +28,7 @@ import 'horilla_main/home.dart';
 import 'horilla_main/notification_router.dart';
 import 'horilla_main/notifications_list.dart';
 import 'package:http/http.dart' as http;
+import 'package:horilla/res/utilities/employee_name_helper.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
 FlutterLocalNotificationsPlugin();
@@ -182,9 +183,7 @@ Future<void> prefetchData() async {
       final responseData = jsonDecode(response.body);
       arguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': buildEmployeeName(responseData),
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
