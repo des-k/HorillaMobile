@@ -1013,9 +1013,6 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
       _errorMessage = null;
       getEmployeeDetails();
       setState(() {});
-      setState(() {
-        isLoadingImage = false;
-      });
     } else {
       var responseBody = await response.stream.bytesToString();
       var errorJson = jsonDecode(responseBody);
@@ -1349,20 +1346,41 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
   }
 
   Future<void> _pickImage(int id) async {
-    isLoadingImage = true;
-    XFile? file = await uploadFile(context);
-    if (file != null) {
-      setState(() async {
-        pickedFile = file;
-        fileName = file.name;
-        filePath = file.path;
-        checkFile = true;
-        Map<String, dynamic> updatedDetails = {
-          "id": id,
-        };
-        await updateEmployeeImage(
-            updatedDetails, checkFile, fileName, filePath);
+    if (!mounted) return;
+    setState(() {
+      isLoadingImage = true;
+    });
+
+    final XFile? file = await uploadFile(context);
+    if (file == null) {
+      if (!mounted) return;
+      setState(() {
+        isLoadingImage = false;
       });
+      return;
+    }
+
+    pickedFile = file;
+    fileName = file.name;
+    filePath = file.path;
+    checkFile = true;
+
+    if (mounted) {
+      setState(() {});
+    }
+
+    final Map<String, dynamic> updatedDetails = {
+      "id": id,
+    };
+
+    try {
+      await updateEmployeeImage(updatedDetails, checkFile, fileName, filePath);
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoadingImage = false;
+        });
+      }
     }
   }
 

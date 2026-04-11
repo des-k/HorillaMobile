@@ -28,6 +28,8 @@ class AuthenticatedNetworkImage extends StatefulWidget {
   final String? authToken;
   final String? cacheKey;
   final String? cacheVersion;
+  final int? memCacheWidth;
+  final int? memCacheHeight;
 
   const AuthenticatedNetworkImage({
     super.key,
@@ -43,6 +45,8 @@ class AuthenticatedNetworkImage extends StatefulWidget {
     this.authToken,
     this.cacheKey,
     this.cacheVersion,
+    this.memCacheWidth,
+    this.memCacheHeight,
   });
 
   @override
@@ -76,7 +80,9 @@ class _AuthenticatedNetworkImageState extends State<AuthenticatedNetworkImage> {
         oldWidget.cacheVersion != widget.cacheVersion ||
         oldWidget.width != widget.width ||
         oldWidget.height != widget.height ||
-        oldWidget.fit != widget.fit) {
+        oldWidget.fit != widget.fit ||
+        oldWidget.memCacheWidth != widget.memCacheWidth ||
+        oldWidget.memCacheHeight != widget.memCacheHeight) {
       _imageFuture = _resolveImage();
     }
   }
@@ -162,6 +168,8 @@ class _AuthenticatedNetworkImageState extends State<AuthenticatedNetworkImage> {
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
+        cacheWidth: widget.memCacheWidth,
+        cacheHeight: widget.memCacheHeight,
         gaplessPlayback: true,
         headers: <String, String>{'Authorization': 'Bearer $token'},
         errorBuilder: widget.errorBuilder ?? (_, __, ___) => widget.errorWidget ?? const SizedBox.shrink(),
@@ -184,6 +192,8 @@ class _AuthenticatedNetworkImageState extends State<AuthenticatedNetworkImage> {
         width: widget.width,
         height: widget.height,
         fit: widget.fit,
+        cacheWidth: widget.memCacheWidth,
+        cacheHeight: widget.memCacheHeight,
         gaplessPlayback: true,
         errorBuilder: widget.errorBuilder ?? (_, __, ___) => widget.errorWidget ?? const SizedBox.shrink(),
       ),
