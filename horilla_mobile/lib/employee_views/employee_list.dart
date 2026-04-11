@@ -33,7 +33,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
   int currentPage = 1;
   int requestsCount = 0;
   int maxCount = 5;
-  late Map<String, dynamic> arguments;
+  Map<String, dynamic>? currentEmployeeArguments;
   late String baseUrl = '';
   late String getToken = '';
   bool isLoading = true;
@@ -90,7 +90,27 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
     });
   }
 
-  void prefetchData() async {
+  String _buildEmployeeName(Map<String, dynamic> source) {
+    final firstName = (source['employee_first_name'] ?? '').toString().trim();
+    final lastName = (source['employee_last_name'] ?? '').toString().trim();
+    return [firstName, lastName].where((e) => e.isNotEmpty).join(' ');
+  }
+
+  Future<void> _openCurrentEmployeeProfile() async {
+    if (currentEmployeeArguments == null) {
+      await prefetchData();
+    }
+    if (!mounted || currentEmployeeArguments == null) {
+      return;
+    }
+    Navigator.pushNamed(
+      context,
+      '/employees_form',
+      arguments: currentEmployeeArguments,
+    );
+  }
+
+  Future<void> prefetchData() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
     var typedServerUrl = prefs.getString("typed_url");
@@ -103,11 +123,12 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
 
     if (response.statusCode == 200) {
       final responseData = jsonDecode(response.body);
-      arguments = {
+      final firstName = (responseData['employee_first_name'] ?? '').toString().trim();
+      final lastName = (responseData['employee_last_name'] ?? '').toString().trim();
+      final employeeName = [firstName, lastName].where((e) => e.isNotEmpty).join(' ');
+      currentEmployeeArguments = {
         'employee_id': responseData['id'],
-        'employee_name': responseData['employee_first_name'] +
-            ' ' +
-            responseData['employee_last_name'],
+        'employee_name': employeeName,
         'badge_id': responseData['badge_id'],
         'email': responseData['email'],
         'phone': responseData['phone'],
@@ -255,9 +276,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
             final args = ModalRoute.of(context)?.settings.arguments;
             Navigator.pushNamed(context, '/employees_form', arguments: {
               'employee_id': record['id'],
-              'employee_name': record['employee_first_name'] +
-                  ' ' +
-                  record['employee_last_name'],
+              'employee_name': _buildEmployeeName(record),
               'permission_check': args,
             });
           },
@@ -298,9 +317,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
             ),
           ),
           title: Text(
-            record['employee_first_name'] +
-                ' ' +
-                (record['employee_last_name'] ?? ''),
+            _buildEmployeeName(record),
             style: const TextStyle(
               fontWeight: FontWeight.bold,
               fontSize: 15.0,
@@ -653,8 +670,7 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
               Navigator.pushNamed(context, '/employee_checkin_checkout');
               break;
             case 2:
-              Navigator.pushNamed(context, '/employees_form',
-                  arguments: arguments);
+              await _openCurrentEmployeeProfile();
               break;
           }
         },
