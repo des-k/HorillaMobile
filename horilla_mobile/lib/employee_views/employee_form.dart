@@ -1368,8 +1368,12 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
   Future<XFile?> uploadFile(BuildContext context) async {
     final picker = ImagePicker();
-    final XFile? pickedFile =
-    await picker.pickImage(source: ImageSource.gallery);
+    final XFile? pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 88,
+      maxWidth: 2048,
+      maxHeight: 2048,
+    );
     if (pickedFile != null) {
       return pickedFile;
     } else {
