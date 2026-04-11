@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:animated_notch_bottom_bar/animated_notch_bottom_bar/animated_notch_bottom_bar.dart';
 import 'package:shimmer/shimmer.dart';
 import 'package:loading_animation_widget/loading_animation_widget.dart';
+import 'package:horilla/res/utilities/private_image_cache.dart';
 import 'package:horilla/res/widgets/authenticated_network_image.dart';
 
 class EmployeeListPage extends StatefulWidget {
@@ -79,8 +80,13 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
   Future<void> fetchToken() async {
     final prefs = await SharedPreferences.getInstance();
     var token = prefs.getString("token");
+    final normalizedToken = (token ?? '').trim();
+    if (normalizedToken.isNotEmpty) {
+      AuthenticatedNetworkImage.primeToken(normalizedToken);
+    }
+    if (!mounted) return;
     setState(() {
-      getToken = token ?? '';
+      getToken = normalizedToken;
     });
   }
 
@@ -184,9 +190,64 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
     return Color((hashCode & 0xFFFFFF).toInt()).withOpacity(1.0);
   }
 
+  String _absoluteMediaUrl(String raw) {
+    final value = raw.trim();
+    if (value.isEmpty) return '';
+    if (value.startsWith('http://') || value.startsWith('https://')) return value;
+    final normalizedBase = baseUrl.trim();
+    if (normalizedBase.isEmpty) return '';
+    if (value.startsWith('/')) return '$normalizedBase$value';
+    return '$normalizedBase/$value';
+  }
+
+  String _recordProfileAvatarUrl(Map<String, dynamic> record) {
+    final avatarUrl = _absoluteMediaUrl((record['employee_profile_avatar'] ?? '').toString());
+    if (avatarUrl.isNotEmpty) return avatarUrl;
+    return _absoluteMediaUrl((record['employee_profile'] ?? '').toString());
+  }
+
+  String _recordProfileAvatarVersion(Map<String, dynamic> record) {
+    final avatarVersion = (record['employee_profile_avatar_version'] ?? '').toString().trim();
+    if (avatarVersion.isNotEmpty) return avatarVersion;
+    return (record['employee_profile_version'] ?? '').toString().trim();
+  }
+
+  String _recordProfileAvatarCacheKey(Map<String, dynamic> record) {
+    final id = (record['id'] ?? '').toString().trim();
+    final normalizedId = id.isEmpty ? 'unknown' : id;
+    final hasAvatar = ((record['employee_profile_avatar'] ?? '').toString().trim().isNotEmpty);
+    return hasAvatar
+        ? 'employee_list_avatar_$normalizedId'
+        : 'employee_list_profile_$normalizedId';
+  }
+
+  Future<void> _warmEmployeeListAvatar(Map<String, dynamic> record) async {
+    final imageUrl = _recordProfileAvatarUrl(record);
+    final version = _recordProfileAvatarVersion(record);
+    final cacheKey = _recordProfileAvatarCacheKey(record);
+    final token = getToken.trim();
+    if (imageUrl.isEmpty || version.isEmpty || cacheKey.isEmpty || token.isEmpty) {
+      return;
+    }
+    await PrivateImageCacheService.getOrFetch(
+      cacheKey: cacheKey,
+      imageUrl: imageUrl,
+      version: version,
+      token: token,
+    );
+  }
+
   Widget buildListItem(Map<String, dynamic> record, baseUrl, token) {
     String position = record['job_position_name'] ?? 'Unknown';
     Color positionColor = _getColorForPosition(position);
+    final resolvedImageUrl = _recordProfileAvatarUrl(record);
+    final resolvedCacheVersion = _recordProfileAvatarVersion(record);
+    final resolvedCacheKey = _recordProfileAvatarCacheKey(record);
+    if (resolvedImageUrl.isNotEmpty &&
+        resolvedCacheVersion.isNotEmpty &&
+        token.toString().trim().isNotEmpty) {
+      _warmEmployeeListAvatar(record);
+    }
     return Column(
       children: [
         ListTile(
@@ -205,20 +266,25 @@ class _EmployeeListPageState extends State<EmployeeListPage> {
             backgroundColor: Colors.transparent,
             child: Stack(
               children: [
-                if (record['employee_profile'] != null &&
-                    record['employee_profile'].isNotEmpty)
+                if (resolvedImageUrl.isNotEmpty)
                   Positioned.fill(
                     child: ClipOval(
                       child: AuthenticatedNetworkImage(
-imageUrl: record['employee_profile'],
-                                  baseUrl: baseUrl,
-                                  fit: BoxFit.cover,
-                                  errorWidget: const Icon(Icons.person),
-                                ),
+                        key: ValueKey('employee_list_avatar_${resolvedCacheVersion}_$resolvedImageUrl'),
+                        imageUrl: resolvedImageUrl,
+                        authToken: token.toString().trim(),
+                        fit: BoxFit.cover,
+                        width: 40,
+                        height: 40,
+                        memCacheWidth: 80,
+                        memCacheHeight: 80,
+                        cacheKey: resolvedCacheKey,
+                        cacheVersion: resolvedCacheVersion,
+                        errorWidget: const Icon(Icons.person),
+                      ),
                     ),
                   ),
-                if (record['employee_profile'] == null ||
-                    record['employee_profile'].isEmpty)
+                if (resolvedImageUrl.isEmpty)
                   Positioned.fill(
                     child: Container(
                       decoration: BoxDecoration(
