@@ -71,6 +71,8 @@ class PrivateImageCacheService {
         }
       }
 
+      final stalePath = existingPath;
+
       final response = await http.get(
         Uri.parse(imageUrl),
         headers: <String, String>{
@@ -87,9 +89,19 @@ class PrivateImageCacheService {
       }
 
       final extension = _detectExtension(imageUrl, response.headers['content-type']);
-      final targetPath = '${cacheDir.path}/${_safeFileName(cacheKey)}$extension';
+      final versionedName = '${_safeFileName(cacheKey)}__${_safeFileName(version)}';
+      final targetPath = '${cacheDir.path}/$versionedName$extension';
       final file = File(targetPath);
       await file.writeAsBytes(response.bodyBytes, flush: true);
+
+      if (stalePath.isNotEmpty && stalePath != file.path) {
+        try {
+          final oldFile = File(stalePath);
+          if (await oldFile.exists()) {
+            await oldFile.delete();
+          }
+        } catch (_) {}
+      }
 
       await prefs.setString(versionKey, version);
       await prefs.setString(pathKey, file.path);
@@ -97,6 +109,34 @@ class PrivateImageCacheService {
       return file;
     } catch (_) {
       return null;
+    }
+  }
+
+  static Future<void> invalidate({required String cacheKey}) async {
+    final normalizedKey = cacheKey.trim();
+    if (normalizedKey.isEmpty) {
+      return;
+    }
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final versionKey = 'private_image_cache.version.$normalizedKey';
+      final pathKey = 'private_image_cache.path.$normalizedKey';
+      final urlKey = 'private_image_cache.url.$normalizedKey';
+      final existingPath = (prefs.getString(pathKey) ?? '').trim();
+      if (existingPath.isNotEmpty) {
+        try {
+          final oldFile = File(existingPath);
+          if (await oldFile.exists()) {
+            await oldFile.delete();
+          }
+        } catch (_) {}
+      }
+      await prefs.remove(versionKey);
+      await prefs.remove(pathKey);
+      await prefs.remove(urlKey);
+    } catch (_) {
+      return;
     }
   }
 

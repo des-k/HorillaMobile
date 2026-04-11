@@ -290,8 +290,16 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     return _absoluteMediaUrlWhenReady((employeeDetails['employee_profile'] ?? '').toString());
   }
 
+  String _employeeProfileAvatarImageUrl() {
+    return _absoluteMediaUrlWhenReady((employeeDetails['employee_profile_avatar'] ?? '').toString());
+  }
+
   String _employeeProfileCacheVersion() {
     return (employeeDetails['employee_profile_version'] ?? '').toString().trim();
+  }
+
+  String _employeeProfileAvatarCacheVersion() {
+    return (employeeDetails['employee_profile_avatar_version'] ?? '').toString().trim();
   }
 
   String? _employeeProfileCacheKey() {
@@ -300,6 +308,22 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     final normalizedId = id.toString().trim();
     if (normalizedId.isEmpty) return null;
     return 'employee_profile_$normalizedId';
+  }
+
+  String? _employeeProfileAvatarCacheKey() {
+    final id = employeeDetails['id'];
+    if (id == null) return null;
+    final normalizedId = id.toString().trim();
+    if (normalizedId.isEmpty) return null;
+    return 'employee_profile_avatar_$normalizedId';
+  }
+
+  String? _employeeFaceCacheKey() {
+    final id = employeeDetails['id'];
+    if (id == null) return null;
+    final normalizedId = id.toString().trim();
+    if (normalizedId.isEmpty) return null;
+    return 'employee_face_$normalizedId';
   }
 
   String _employeeFaceImageUrl() {
@@ -338,16 +362,21 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
 
   void _scheduleEmployeeImageWarmup() {
     Future.microtask(() async {
+      final avatarImageUrl = _employeeProfileAvatarImageUrl();
+      final avatarCacheKey = _employeeProfileAvatarCacheKey();
+      final avatarCacheVersion = _employeeProfileAvatarCacheVersion();
+      final fallbackProfileImageUrl = _employeeProfileImageUrl();
+      final fallbackProfileCacheKey = _employeeProfileCacheKey();
+      final fallbackProfileCacheVersion = _employeeProfileCacheVersion();
+
       await _warmPrivateImageCache(
-        imageUrl: _employeeProfileImageUrl(),
-        cacheKey: _employeeProfileCacheKey(),
-        cacheVersion: _employeeProfileCacheVersion(),
+        imageUrl: avatarImageUrl.isNotEmpty ? avatarImageUrl : fallbackProfileImageUrl,
+        cacheKey: avatarImageUrl.isNotEmpty ? avatarCacheKey : fallbackProfileCacheKey,
+        cacheVersion: avatarImageUrl.isNotEmpty ? avatarCacheVersion : fallbackProfileCacheVersion,
       );
       await _warmPrivateImageCache(
         imageUrl: _employeeFaceImageUrl(),
-        cacheKey: _employeeProfileCacheKey() == null
-            ? null
-            : 'employee_face_${employeeDetails['id']}',
+        cacheKey: _employeeFaceCacheKey(),
         cacheVersion: _employeeFaceCacheVersion(),
       );
     });
@@ -1011,15 +1040,24 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
     var response = await request.send();
     if (response.statusCode == 200) {
       _errorMessage = null;
-      getEmployeeDetails();
+      final profileCacheKey = _employeeProfileCacheKey();
+      final profileAvatarCacheKey = _employeeProfileAvatarCacheKey();
+      if (profileCacheKey != null && profileCacheKey.isNotEmpty) {
+        await PrivateImageCacheService.invalidate(cacheKey: profileCacheKey);
+      }
+      if (profileAvatarCacheKey != null && profileAvatarCacheKey.isNotEmpty) {
+        await PrivateImageCacheService.invalidate(cacheKey: profileAvatarCacheKey);
+      }
+      await getEmployeeDetails();
+      if (!mounted) return;
       setState(() {});
     } else {
       var responseBody = await response.stream.bytesToString();
       var errorJson = jsonDecode(responseBody);
       if (errorJson.containsKey('non_field_errors')) {
         _errorMessage = errorJson['non_field_errors'].join('\n');
-        setState(() {});
       }
+      if (!mounted) return;
       setState(() {});
     }
   }
@@ -4251,10 +4289,16 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                               children: [
                                 Builder(
                                   builder: (context) {
+                                    final avatarImageUrl = _employeeProfileAvatarImageUrl();
+                                    final avatarCacheKey = _employeeProfileAvatarCacheKey();
+                                    final avatarCacheVersion = _employeeProfileAvatarCacheVersion();
                                     final profileImageUrl = _employeeProfileImageUrl();
                                     final profileCacheKey = _employeeProfileCacheKey();
                                     final profileCacheVersion = _employeeProfileCacheVersion();
-                                    final hasProfileImage = profileImageUrl.isNotEmpty;
+                                    final resolvedImageUrl = avatarImageUrl.isNotEmpty ? avatarImageUrl : profileImageUrl;
+                                    final resolvedCacheKey = avatarImageUrl.isNotEmpty ? avatarCacheKey : profileCacheKey;
+                                    final resolvedCacheVersion = avatarImageUrl.isNotEmpty ? avatarCacheVersion : profileCacheVersion;
+                                    final hasProfileImage = resolvedImageUrl.isNotEmpty;
 
                                     if (!hasProfileImage) {
                                       return Positioned.fill(
@@ -4271,11 +4315,16 @@ class _EmployeeFormPageState extends State<EmployeeFormPage>
                                     return Positioned.fill(
                                       child: ClipOval(
                                         child: AuthenticatedNetworkImage(
-                                          imageUrl: profileImageUrl,
+                                          key: ValueKey('employee_profile_avatar_${resolvedCacheVersion}_$resolvedImageUrl'),
+                                          imageUrl: resolvedImageUrl,
                                           authToken: getToken,
                                           fit: BoxFit.cover,
-                                          cacheKey: profileCacheKey,
-                                          cacheVersion: profileCacheVersion,
+                                          width: 60,
+                                          height: 60,
+                                          cacheKey: resolvedCacheKey,
+                                          cacheVersion: resolvedCacheVersion,
+                                          memCacheWidth: 120,
+                                          memCacheHeight: 120,
                                           placeholder: Container(
                                             color: Colors.grey[300],
                                             alignment: Alignment.center,
